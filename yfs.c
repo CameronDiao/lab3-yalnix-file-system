@@ -5,11 +5,11 @@
 #include <comp421/yalnix.h>
 #include <comp421/filesystem.h>
 #include "yfs.h"
-#include "cache.h"
-#include "buffer.h"
-#include "path.h"
+// #include "cache.h"
+// #include "buffer.h"
+// #include "path.h"
 #include "packet.h"
-#include "dirname.h"
+// #include "dirname.h"
 
 #define DIRSIZE             (int)sizeof(struct dir_entry)
 #define MAX_DIRECT_SIZE     BLOCKSIZE * NUM_DIRECT
@@ -19,6 +19,35 @@
 #define DIR_PER_BLOCK       (BLOCKSIZE / DIRSIZE)
 #define GET_DIR_COUNT(n)    (n / DIRSIZE)
 
+
+struct buffer {
+    /**
+     * Size to go to until the buffer loops
+     */
+    int size;
+    /**
+     * Pointer to character array
+     */
+    int *b;
+    /**
+     * First filled space, next to be removed
+     */
+    int out;
+
+    /**
+     * First empty space, next to be filled
+     */
+    int in;
+    /**
+     * Condition on if the buffer is empty
+     */
+    int empty;
+    /**
+     * Condition on if the buffer is full
+     */
+    int full;
+};
+
 struct fs_header *header; /* Pointer to File System Header */
 
 struct block_cache* block_stack; /* Cache for recently accessed blocks */
@@ -26,6 +55,960 @@ struct inode_cache* inode_stack; /* Cache for recently accessed inodes */
 
 struct buffer* free_inode_list; /* List of Inodes available to assign to files */
 struct buffer* free_block_list; /* List of blocks ready to allocate for file data */
+
+/**********
+ * BUFFER *
+ **********/
+
+
+/**
+ * Constructor message for a new buffer
+ * @param size How much space to allocate for the buffer
+ */
+struct buffer *GetBuffer(int size);
+
+/**
+ * Adds a value to the buffers queue
+ * @param buf Buffer to add to
+ * @param c Character that is being added
+ */
+void PushToBuffer(struct buffer *buf, int i);
+
+/**
+ * Pops the next character from the buffer's queue
+ * @param buf Buffer requesting character from
+ * @return the character that was popped
+ */
+int PopFromBuffer(struct buffer *buf);
+/**
+ * Prints out the contents of the buffer
+ * @param buf Buffer to print
+ */
+void PrintBuffer(struct buffer *buf);
+
+struct buffer *GetBuffer(int size) {
+    struct buffer* newBuf = malloc(sizeof(struct buffer));
+    newBuf->size = size;
+    newBuf->b = malloc(sizeof(int) * size);
+    newBuf->in = 0;
+    newBuf->out = 0;
+    /**
+     * New buffer should ALWAYS be empty
+     */
+    newBuf->empty = 1;
+    newBuf->full = 0;
+    return newBuf;
+}
+
+void PushToBuffer(struct buffer *buf, int i) {
+    if (buf->full) {
+        return;
+    }
+    if (buf->empty) {
+        buf->empty = 0;
+    }
+    buf->b[buf->in] = i;
+    buf->in++;
+    if (buf->in >= buf->size) {
+        buf->in = 0;
+    }
+    if (buf->in == buf->out) {
+        buf->full = 1;
+    }
+}
+
+int PopFromBuffer(struct buffer *buf) {
+    if (buf->empty) {
+        return '\0';
+    }
+    int next = buf->b[buf->out];
+    buf->out++;
+    if (buf->out >= buf->size) {
+        buf->out = 0;
+    }
+    if (buf->out == buf->in) {
+        buf->empty = 1;
+    }
+    if (buf->full) {
+        buf->full = 0;
+    }
+    return next;
+}
+
+void PrintBuffer(struct buffer *buf) {
+    int i;
+    if (buf->out < buf->in) {
+        printf("[");
+        for (i = buf->out; i < buf->in-1; i++) {
+            printf("%d, ", buf->b[i]);
+        }
+        printf("%d]\n", buf->b[buf->in-1]);
+    } else {
+        printf("[");
+        for (i = buf->out; i < buf->size; i++) {
+            printf("%d, ", buf->b[i]);
+        }
+        for (i = 0; i < buf->in-1; i++) {
+            printf("%d, ", buf->b[i]);
+        }
+        printf("%d]\n", buf->b[buf->in-1]);
+    }
+
+}
+
+/********
+ * PATH *
+ ********/
+
+typedef struct PathIterator {
+    struct PathIterator *head;
+    struct PathIterator *next;
+    char data[DIRNAMELEN];
+} PathIterator;
+
+/*
+ * Given pathname as Yalnix argument, parse it
+ * into a linked list of component.
+ */
+PathIterator *ParsePath(char *pathname);
+
+/*
+ * Free pathIterator linked list after finished using it.
+ * You must provided the head of the linked list.
+ */
+int DeletePathIterator(PathIterator *it);
+
+
+/*
+ * Private helper method which allocate PathIterator.
+ */
+PathIterator *CreatePathIterator(PathIterator *head) {
+    PathIterator *it = malloc(sizeof(PathIterator));
+    it->head = head;
+    it->next = NULL;
+    return it;
+}
+
+/*
+ * Given pathname as Yalnix argument, parse it
+ * into a linked list of component.
+ */
+PathIterator *ParsePath(char *pathname) {
+    PathIterator *it = CreatePathIterator(NULL);
+    PathIterator *head = it;
+
+    int i = 0;
+    int start = 0;
+    int found = 0;
+    char next;
+
+    // Backslash is found in the root position
+    if (pathname[0] == '/') {
+        SetDirectoryName(it->data, pathname, 0, 1);
+        it->next = CreatePathIterator(head);
+        it = it->next;
+        i++;
+        start = 1;
+        found = 1;
+    }
+
+    while ((next = pathname[i]) != '\0') {
+        if (found == 0 && next == '/') {
+            // Backslash is just found
+            SetDirectoryName(it->data, pathname, start, i);
+            it->next = CreatePathIterator(head);
+            it = it->next;
+            found = 1;
+        } else if (found == 1 && next != '/') {
+            // Backslash is just finished.
+            found = 0;
+            start = i;
+        }
+        i++;
+    }
+
+    if (found) {
+        // If iterator is finished after backslash is found,
+        // last component is current directory
+        SetDirectoryName(it->data, ".", 0, 1);
+        it->next = CreatePathIterator(head);
+    } else {
+        // Last remaining path
+        SetDirectoryName(it->data, pathname, start, i);
+        it->next = CreatePathIterator(head);
+    }
+
+    return head;
+}
+
+/*
+ * Free pathIterator linked list after finished using it.
+ * You must provided the head of the linked list.
+ */
+int DeletePathIterator(PathIterator *head) {
+    PathIterator *prev;
+    PathIterator *it = head;
+
+    while (it != NULL) {
+        prev = it;
+        it = it->next;
+        free(prev);
+    }
+    return 0;
+}
+
+void TestPathIterator() {
+    PathIterator *it;
+
+    printf("Testing /abc/def/ghi.c\n");
+    it = ParsePath("/abc/def/ghi.c");
+    assert(strcmp(it->data, "/") == 0);
+    it = it->next;
+    assert(strcmp(it->data, "abc") == 0);
+    it = it->next;
+    assert(strcmp(it->data, "def") == 0);
+    it = it->next;
+    assert(strcmp(it->data, "ghi.c") == 0);
+    it = it->next;
+    assert(it->next == NULL);
+    DeletePathIterator(it->head);
+
+    printf("Testing xyz/123-456\n");
+    it = ParsePath("xyz/123-456");
+    assert(strcmp(it->data, "xyz") == 0);
+    it = it->next;
+    assert(strcmp(it->data, "123-456") == 0);
+    it = it->next;
+    printf("it->data: %s\n", it->data);
+    assert(it->next == NULL);
+    DeletePathIterator(it->head);
+
+    printf("Testing ../../foo/bar/baz/example.txt\n");
+    it = ParsePath("../../foo/bar/baz/example.txt");
+    assert(strcmp(it->data, "..") == 0);
+    it = it->next;
+    assert(strcmp(it->data, "..") == 0);
+    it = it->next;
+    assert(strcmp(it->data, "foo") == 0);
+    it = it->next;
+    assert(strcmp(it->data, "bar") == 0);
+    it = it->next;
+    assert(strcmp(it->data, "baz") == 0);
+    it = it->next;
+    assert(strcmp(it->data, "example.txt") == 0);
+    it = it->next;
+    assert(it->next == NULL);
+    DeletePathIterator(it->head);
+
+    printf("Testing silly/./././././././example.txt\n");
+    it = ParsePath("silly/./././././././example.txt");
+    assert(strcmp(it->data, "silly") == 0);
+    it = it->next;
+    assert(strcmp(it->data, ".") == 0);
+    it = it->next;
+    assert(strcmp(it->data, ".") == 0);
+    it = it->next;
+    assert(strcmp(it->data, ".") == 0);
+    it = it->next;
+    assert(strcmp(it->data, ".") == 0);
+    it = it->next;
+    assert(strcmp(it->data, ".") == 0);
+    it = it->next;
+    assert(strcmp(it->data, ".") == 0);
+    it = it->next;
+    assert(strcmp(it->data, ".") == 0);
+    it = it->next;
+    assert(strcmp(it->data, "example.txt") == 0);
+    it = it->next;
+    assert(it->next == NULL);
+    DeletePathIterator(it->head);
+
+    printf("Testing //////dirname//subdirname///file\n");
+    it = ParsePath("//////dirname//subdirname///file");
+    assert(strcmp(it->data, "/") == 0);
+    it = it->next;
+    assert(strcmp(it->data, "dirname") == 0);
+    it = it->next;
+    assert(strcmp(it->data, "subdirname") == 0);
+    it = it->next;
+    assert(strcmp(it->data, "file") == 0);
+    it = it->next;
+    assert(it->next == NULL);
+    DeletePathIterator(it->head);
+
+    printf("Testing /a/b/c/\n");
+    it = ParsePath("/a/b/c/");
+    assert(strcmp(it->data, "/") == 0);
+    it = it->next;
+    assert(strcmp(it->data, "a") == 0);
+    it = it->next;
+    assert(strcmp(it->data, "b") == 0);
+    it = it->next;
+    assert(strcmp(it->data, "c") == 0);
+    it = it->next;
+    assert(strcmp(it->data, ".") == 0);
+    it = it->next;
+    assert(it->next == NULL);
+    DeletePathIterator(it->head);
+}
+
+/*********
+ * Cache *
+ *********/
+
+struct block_cache {
+    struct block_cache_entry* top; //Top of the cache stack
+    struct block_cache_entry* base; //Bottom of the cache stack
+    struct block_cache_entry** hash_set;
+    int stack_size; //Number of entries in the cache stack
+    int hash_size;
+};
+
+struct block_cache_entry {
+    void* block;
+    int block_number; //Item that this entry represents. Can either be a block or inode
+    struct block_cache_entry* prev_lru; //Previous Block in Stack
+    struct block_cache_entry* next_lru; //Next Block in Stack
+    struct block_cache_entry* prev_hash;
+    struct block_cache_entry* next_hash;
+    int dirty; //Whether or not this
+};
+
+struct inode_cache {
+    struct inode_cache_entry* top; //Top of the cache stack
+    struct inode_cache_entry* base; //Bottom of the cache stack
+    struct inode_cache_entry** hash_set;
+    int stack_size; //Number of entries in the cache stack
+    int hash_size; //Number of hash collisions
+};
+
+struct inode_cache_entry {
+    struct inode* inode; //Item that this entry represents. Can either be a block or inode
+    int inum; //Inode/Block number of the cache entry.
+    struct inode_cache_entry* prev_lru; //Previous Inode in Stack
+    struct inode_cache_entry* next_lru; //Next Inode in Stack
+    struct inode_cache_entry* prev_hash;
+    struct inode_cache_entry* next_hash;
+    int dirty; //Whether or not this
+};
+
+int inode_count;
+int block_count;
+struct block_cache* block_stack; /* Cache for recently accessed blocks */
+struct inode_cache* inode_stack; /* Cache for recently accessed inodes */
+
+struct inode_cache *CreateInodeCache();
+
+void AddToInodeCache(struct inode_cache *stack, struct inode *in, int inumber);
+
+struct inode_cache_entry* LookUpInode(struct inode_cache *stack, int inumber);
+
+void RaiseInodeCachePosition(struct inode_cache* stack, struct inode_cache_entry* recent_access);
+
+void WriteBackInode(struct inode_cache_entry* out);
+
+struct inode_cache_entry* GetInode(int inode_num);
+
+void PrintInodeCacheHashSet(struct inode_cache* stack);
+
+void PrintInodeCacheStack(struct inode_cache* stack);
+
+/*********************
+ * Block Cache Code *
+ ********************/
+
+struct block_cache *CreateBlockCache(int num_blocks);
+
+void AddToBlockCache(struct block_cache *stack, void* block, int block_number);
+
+struct block_cache_entry* LookUpBlock(struct block_cache *stack, int block_number);
+
+void RaiseBlockCachePosition(struct block_cache *stack, struct block_cache_entry* recent_access);
+
+void WriteBackBlock(struct block_cache_entry* out);
+
+struct block_cache_entry* GetBlock(int block_num);
+
+void PrintBlockCacheHashSet(struct block_cache* stack);
+
+void PrintBlockCacheStack(struct block_cache* stack);
+
+int HashIndex(int key_value);
+
+void TestInodeCache(int num_inodes);
+
+void TestBlockCache(int num_blocks);
+
+/*********************
+ * Inode Cache Code *
+ ********************/
+/**
+ * Creates a new Cache for Inodes
+ * @return Newly created cache
+ */
+struct inode_cache *CreateInodeCache(int num_inodes) {
+    inode_count = num_inodes;
+    struct inode_cache *new_cache = malloc(sizeof(struct inode_cache));
+    new_cache->stack_size = 0;
+    new_cache->hash_set = calloc((num_inodes/8) + 1, sizeof(struct inode_cache_entry));
+    new_cache->hash_size = (num_inodes/8) + 1;
+    inode_stack = new_cache;
+    struct inode* dummy_inode = malloc(sizeof(struct inode));
+    int i;
+    for (i = -1; i >= -1 * INODE_CACHESIZE; i--) {
+        AddToInodeCache(new_cache, dummy_inode, i);
+    }
+    return new_cache;
+}
+
+/**
+ * Adds a new inode to the top of the cache entry
+ */
+void AddToInodeCache(struct inode_cache *stack, struct inode *inode, int inum) {
+    if (stack->stack_size == INODE_CACHESIZE) {
+        /**If the stack is full, the base is de-allocated and the pointers to it are nullified */
+        struct inode_cache_entry *entry = stack->base;
+        int old_index = HashIndex(entry->inum);
+        int new_index = HashIndex(inum);
+
+        /**Reassign Base*/
+        stack->base = stack->base->prev_lru;
+        stack->base->next_lru = NULL;
+
+        /** Write Back the Inode if it is dirty to avoid losing data*/
+        if (entry->dirty && entry->inum > 0) WriteBackInode(entry);
+        if (entry->prev_hash != NULL && entry->next_hash != NULL) {
+            /**Both Neighbors aren't Null*/
+            entry->next_hash->prev_hash = entry->prev_hash;
+            entry->prev_hash->next_hash = entry->next_hash;
+        } else if (entry->prev_hash == NULL && entry->next_hash != NULL) {
+            /**Tail End of Hash Table Array*/
+            stack->hash_set[old_index] = entry->next_hash;
+            entry->next_hash->prev_hash = NULL;
+        } else if (entry->prev_hash != NULL && entry->next_hash == NULL) {
+            /**Head of Hash Table Array*/
+            entry->prev_hash->next_hash = NULL;
+        } else {
+            /**No Neighbors in Hash Table Array*/
+            stack->hash_set[old_index] = NULL;
+        }
+        entry->inode = inode;
+        entry->dirty = 0;
+        entry->inum = inum;
+        entry->prev_lru = NULL;
+        entry->next_lru = stack->top;
+        stack->top->prev_lru = entry;
+        stack->top = entry;
+        entry->prev_hash = NULL;
+        if (stack->hash_set[new_index] != NULL) {
+            stack->hash_set[new_index]->prev_hash = entry;
+        }
+        entry->next_hash = stack->hash_set[new_index];
+        stack->hash_set[new_index] = entry;
+    } else {
+        /** Create a Cache Entry for the Inode*/
+        struct inode_cache_entry* item = malloc(sizeof(struct inode_cache_entry));
+        int index = HashIndex(inum);
+        item->inum = inum;
+        item->inode = inode;
+        item->prev_hash = NULL;
+        item->prev_lru = NULL;
+
+        /** If hash already exists, enqueue item in the hash linked list */
+        if (stack->hash_set[index] != NULL) {
+            stack->hash_set[index]->prev_hash = item;
+        }
+        item->next_hash = stack->hash_set[index];
+        stack->hash_set[index] = item;
+
+        /** Place entry into the LRU Stack*/
+        if (stack->stack_size == 0) {
+            /** If the stack is empty the entry becomes both the top and base*/
+            stack->base = item;
+            stack->top = item;
+        } else {
+            /** If the stack isn't empty the entry is added to the top*/
+            item->next_lru = stack->top;
+            stack->top->prev_lru = item;
+            stack->top = item;
+        }
+
+        /**If the stack isn't full increase the size*/
+        stack->stack_size++;
+    }
+}
+
+/**
+ * Searches up an inode within a cache
+ * @param stack Cache to look for the inode in
+ * @param inum Number of the inode being looked up
+ * @return The requested inode
+ */
+struct inode_cache_entry* LookUpInode(struct inode_cache *stack, int inum) {
+    struct inode_cache_entry* ice;
+    /**For loop iterating into the hash array index the inode number points to*/
+    for (ice = stack->hash_set[HashIndex(inum)]; ice != NULL; ice = ice->next_hash) {
+        if (ice->inum == inum) {
+            RaiseInodeCachePosition(stack, ice);
+            return ice;
+        }
+    }
+    /**Returns null if Inode is not found*/
+    return NULL;
+}
+
+/**
+ *
+ * @param out Inode that was pushed out of the cache
+ */
+void WriteBackInode(struct inode_cache_entry* out) {
+    struct block_cache_entry* inode_block_entry = GetBlock((out->inum / 8) + 1);
+    void* inode_block = inode_block_entry->block;
+    struct inode* overwrite = (struct inode *)inode_block + (out->inum % 8);
+    inode_block_entry->dirty = 1;
+    memcpy(overwrite, out->inode, sizeof(struct inode));
+    out->dirty = 0;
+}
+
+/**
+ * When ever an inode is accessed, it is pulled from it's position in the stack
+ * and placed at the top
+ * @param stack Stack to rearrange
+ * @param recent_access Entry to move
+ */
+void RaiseInodeCachePosition(struct inode_cache* stack, struct inode_cache_entry* recent_access) {
+    if ((recent_access->inum == stack->top->inum) || (recent_access->prev_lru == NULL && recent_access->next_lru == NULL)) return;
+    if (recent_access->inum == stack->base->inum) {
+        /**Reassign Base*/
+        recent_access->prev_lru->next_lru = NULL;
+        stack->base = recent_access->prev_lru;
+
+        /**Reassign Top*/
+        recent_access->next_lru = stack->top;
+        stack->top->prev_lru = recent_access;
+        stack->top = recent_access;
+    } else {
+        /**Reassign Neighbors*/
+        recent_access->next_lru->prev_lru = recent_access->prev_lru;
+        recent_access->prev_lru->next_lru = recent_access->next_lru;
+
+        /**Reassign Top*/
+        recent_access->next_lru = stack->top;
+        stack->top->prev_lru = recent_access;
+        stack->top = recent_access;
+    }
+}
+
+/**
+ * Searches for and returns the inode based on the number given
+ * @param inode_num The inode being requested
+ * @return A pointer to where the inode is
+ */
+struct inode_cache_entry* GetInode(int inum) {
+    /** Inode number must be in valid range*/
+    assert(inum >= 1 && inum <= inode_count);
+
+    /** First Check the Inode Cache */
+    struct inode_cache_entry* current = LookUpInode(inode_stack, inum);
+    if (current != NULL) return current;
+
+    /** If it's not in the Inode Cache, check the Block */
+    void* inode_block = GetBlock((inum / 8) + 1)->block;
+
+    /** Add inode to cache, when accessed*/
+    AddToInodeCache(inode_stack, (struct inode *)inode_block + (inum % 8), inum);
+    return inode_stack->top;
+}
+
+void PrintInodeCacheHashSet(struct inode_cache* stack) {
+    int index;
+    struct inode_cache_entry* entry;
+
+    for (index = 0; index < stack->hash_size; index++) {
+        printf("[");
+        for (entry = stack->hash_set[index]; entry != NULL; entry = entry->next_hash) {
+            printf(" %d ",entry->inum);
+        }
+        printf("]\n");
+    }
+}
+
+void PrintInodeCacheStack(struct inode_cache* stack) {
+    struct inode_cache_entry* position = stack->top;
+    while (position != NULL) {
+        printf("| %d |\n", position->inum);
+        position = position->next_lru;
+    }
+}
+
+/*********************
+ * Block Cache Code *
+ ********************/
+/**
+ * Creates new LIFO Cache for blocks
+ */
+struct block_cache *CreateBlockCache(int num_blocks) {
+    block_count = num_blocks;
+    struct block_cache *new_cache = malloc(sizeof(struct block_cache));
+    new_cache->stack_size = 0;
+    new_cache->hash_set = calloc((num_blocks/8) + 1, sizeof(struct block_cache_entry));
+    new_cache->hash_size = (num_blocks/8) + 1;
+    block_stack = new_cache;
+    return new_cache;
+}
+
+/**
+ * Adds a new inode to the top of the cache entry
+ */
+void AddToBlockCache(struct block_cache *stack, void* block, int block_number) {
+    if (stack->stack_size == BLOCK_CACHESIZE) {
+        /**If the stack is full, the base is de-allocated and the pointers to it are nullified */
+        struct block_cache_entry *entry = stack->base;
+        int old_index = HashIndex(entry->block_number);
+        int new_index = HashIndex(block_number);
+
+        /**Reassign Base*/
+        stack->base = stack->base->prev_lru;
+        stack->base->next_lru = NULL;
+
+        /** Write Back the Block if it is dirty to avoid losing data*/
+        if (entry->dirty && entry->block_number > 0) {
+            WriteSector(entry->block_number, entry->block);
+        }
+        if (entry->prev_hash != NULL && entry->next_hash != NULL) {
+            /**Both Neighbors aren't Null*/
+            entry->next_hash->prev_hash = entry->prev_hash;
+            entry->prev_hash->next_hash = entry->next_hash;
+        } else if(entry->prev_hash == NULL && entry->next_hash != NULL) {
+            /**Tail End of Hash Table Array*/
+            stack->hash_set[old_index] = entry->next_hash;
+            entry->next_hash->prev_hash = NULL;
+        } else if(entry->prev_hash != NULL && entry->next_hash == NULL) {
+            /**Head of Hash Table Array*/
+            entry->prev_hash->next_hash = NULL;
+        } else {
+            /**No Neighbors in Hash Table Array*/
+            stack->hash_set[old_index] = NULL;
+        }
+        entry->block = block;
+        entry->dirty = 0;
+        entry->block_number = block_number;
+        entry->prev_lru = NULL;
+        entry->next_lru = stack->top;
+        stack->top->prev_lru = entry;
+        stack->top = entry;
+        entry->prev_hash = NULL;
+        if(stack->hash_set[new_index] != NULL) stack->hash_set[new_index]->prev_hash = entry;
+        entry->next_hash = stack->hash_set[new_index];
+        stack->hash_set[new_index] = entry;
+    } else {
+        /** Create a Cache Entry for the Inode*/
+        struct block_cache_entry* item = malloc(sizeof(struct inode_cache_entry));
+        item->block_number = block_number;
+        item->block = block;
+        int index = HashIndex(block_number);
+        if(stack->hash_set[index] != NULL) stack->hash_set[index]->prev_hash = item;
+        item->next_hash = stack->hash_set[index];
+        item->prev_hash = NULL;
+        item->prev_lru = NULL;
+        stack->hash_set[index] = item;
+        /** Place entry into the LRU Stack*/
+        if (!stack->stack_size) {
+            /** If the stack is empty the entry becomes both the top and base*/
+            stack->base = item;
+            stack->top = item;
+        } else {
+            /** If the stack isn't empty the entry is added to the top*/
+            item->next_lru = stack->top;
+            stack->top->prev_lru = item;
+            stack->top = item;
+        }
+        /**If the stack isn't full increase the size*/
+        stack->stack_size++;
+    }
+}
+
+/**
+ * Searches for a Block in the Cache
+ * @param stack Stack to search for the Block in
+ * @param block_number Number of the block to search for
+ * @return The requested Block or a pointer to Null
+ */
+struct block_cache_entry* LookUpBlock(struct block_cache *stack, int block_number) {
+    struct block_cache_entry* block;
+    /**For loop iterating into the hash array index the inode number points to*/
+    for (block = stack->hash_set[HashIndex(block_number)]; block != NULL; block = block->next_hash) {
+        if (block->block_number == block_number) {
+            RaiseBlockCachePosition(stack,block);
+            return block;
+        }
+    }
+    /**Returns null if Inode is not found*/
+    return NULL;
+}
+
+/**
+ * Repositions block at top of stack whenever used
+ */
+void RaiseBlockCachePosition(struct block_cache *stack, struct block_cache_entry* recent_access) {
+    if ((recent_access->block_number == stack->top->block_number) || (recent_access->prev_lru == NULL && recent_access->next_lru == NULL)) return;
+    if (recent_access->block_number == stack->base->block_number) {
+        /**Reassign Base*/
+        recent_access->prev_lru->next_lru = NULL;
+        stack->base = recent_access->prev_lru;
+
+        /**Reassign Top*/
+        recent_access->next_lru = stack->top;
+        stack->top->prev_lru = recent_access;
+        stack->top = recent_access;
+    } else {
+        /**Reassign Neighbors*/
+        recent_access->next_lru->prev_lru = recent_access->prev_lru;
+        recent_access->prev_lru->next_lru = recent_access->next_lru;
+
+        /**Reassign Top*/
+        recent_access->next_lru = stack->top;
+        stack->top->prev_lru = recent_access;
+        stack->top = recent_access;
+    }
+}
+
+
+void PrintBlockCacheHashSet(struct block_cache* stack) {
+    int index;
+    struct block_cache_entry* entry;
+
+    for (index = 0; index < stack->hash_size; index++) {
+        if (stack->hash_set[index] == NULL) continue;
+        printf("[");
+        for (entry = stack->hash_set[index]; entry != NULL; entry = entry->next_hash) {
+            printf(" %d ",entry->block_number);
+        }
+        printf("]\n");
+    }
+}
+
+/**
+ * Returns a block, either by searching the cache or reading its sector
+ * @param block_num The number of the block being requested
+ * @return Pointer to the data that the block encapsulates
+ */
+struct block_cache_entry* GetBlock(int block_num) {
+    /**Must be a valid block number */
+    assert(block_num >= 1 && block_num <= block_count);
+
+    /** First Check Block Cache*/
+    struct block_cache_entry *current = LookUpBlock(block_stack,block_num);
+    if (current != NULL) return current;
+
+   /** If not found in cache, read directly from disk */
+    void *block_buffer = malloc(SECTORSIZE);
+    ReadSector(block_num, block_buffer);
+    AddToBlockCache(block_stack, block_buffer, block_num);
+    return block_stack->top;
+}
+
+
+/**
+ * Prints out the Block Cache as a stack
+ */
+ void PrintBlockCacheStack(struct block_cache* stack) {
+     struct block_cache_entry* position = stack->top;
+     while (position != NULL) {
+         printf("| %d |\n", position->block_number);
+         position = position->next_lru;
+     }
+ }
+
+int HashIndex(int key_value) {
+    return key_value > 0 ? key_value/8 : key_value/(-8) ;
+}
+
+void TestInodeCache(int num_inodes) {
+    int i;
+    int inode_number;
+    struct inode* inode;
+    for(i = 1; i <= 64; i++) {
+        inode_number = (rand() % num_inodes)+1;
+        printf("Call %d: Calling Inode %d\n",i,inode_number);
+        inode = GetInode(inode_number)->inode;
+        printf("Inode Type: %d\n",inode->type);
+        printf("Cache Hash Table: \n");
+        PrintInodeCacheHashSet(inode_stack);
+        printf("Cache Stack\n");
+        PrintInodeCacheStack(inode_stack);
+        printf("Cache Size: %d\n",inode_stack->stack_size);
+    }
+    int j;
+    for(i = 1; i <= num_inodes; i++) {
+        printf("Calling Inode %d\n",i);
+        for(j = 0; j < 64; j++) {
+            GetInode(i);
+        }
+        printf("%d Calls to Inode %d Successful\n",j,i);
+        printf("Cache Hash Table: \n");
+        PrintInodeCacheHashSet(inode_stack);
+        printf("Cache Stack\n");
+        PrintInodeCacheStack(inode_stack);
+    }
+
+}
+
+void TestBlockCache(int num_blocks) {
+    int i;
+    int block_number;
+    for(i = 1; i <= 64; i++) {
+        block_number = (rand() % num_blocks)+1;
+        printf("Call %d: Calling Block %d\n",i,block_number);
+        GetBlock(block_number);
+        printf("Cache Hash Table: \n");
+        PrintBlockCacheHashSet(block_stack);
+        printf("Cache Stack\n");
+        PrintBlockCacheStack(block_stack);
+        printf("Cache Size: %d\n",block_stack->stack_size);
+    }
+    int j;
+    for(i = 1; i <= num_blocks; i++) {
+        printf("Calling Block %d\n",i);
+        for(j = 0; j < 64; j++) {
+            GetBlock(i);
+        }
+        printf("%d Calls to Inode %d Successful\n",j,i);
+        printf("Cache Hash Table: \n");
+        PrintBlockCacheHashSet(block_stack);
+        printf("Cache Stack\n");
+        PrintBlockCacheStack(block_stack);
+    }
+}
+
+/******************
+ * Directory Name *
+ ******************/
+
+/*
+ * Fills target buffer path + empty strings.
+ */
+void SetDirectoryName(char *target, char *path, int start, int end);
+
+/*
+ * Compare dirname. Return 0 if equal, -1 otherwise.
+ */
+int CompareDirname(char *dirname, char *other);
+
+/*
+ * Fills target buffer path + empty strings.
+ */
+ void SetDirectoryName(char *target, char *path, int start, int end) {
+     int i;
+     for (i = 0; i < DIRNAMELEN; i++) {
+         if (i < end - start) target[i] = path[start + i];
+         else target[i] = '\0';
+     }
+ }
+
+/*
+ * Compare dirname. Return 0 if equal, -1 otherwise.
+ */
+ int CompareDirname(char *dirname, char *other) {
+     int i;
+     for (i = 0; i < DIRNAMELEN; i++) {
+         /* If characters do not match, it is not equal */
+         if (dirname[i] != other[i]) return -1;
+
+         /* If dirname is null string, break */
+         if (dirname[i] == '\0') break;
+     }
+
+     return 0;
+ }
+
+/*******************
+ * File Descriptor *
+ *******************/
+
+typedef struct FileDescriptor {
+    int id; /* FD id */
+    int used; /* Only valid if used = 1 */
+    int inum; /* Inode number */
+    int reuse; /* Same inode with different reuse means file is changed */
+    int pos; /* Current position */
+} FileDescriptor;
+
+/*
+ * Prepare new file descriptor using lowest available fd using file data.
+ * Return NULL if open file table is all filled up.
+ */
+FileDescriptor *CreateFileDescriptor();
+
+/*
+ * Close file descriptor. Return -1 if fd is invalid.
+ */
+int CloseFileDescriptor(int fd);
+
+/*
+ * Get file descriptor. Return NULL if fd is invalid.
+ */
+FileDescriptor *GetFileDescriptor(int fd);
+
+FileDescriptor open_file_table[MAX_OPEN_FILES];
+int initialized = 0;
+
+/*
+ * Private helper for initializing open file table
+ */
+void IntializeOpenFileTable() {
+    int i;
+    if (initialized == 1) return;
+    for (i = 0; i < MAX_OPEN_FILES; i++) {
+        open_file_table[i].id = i;
+        open_file_table[i].used = 0;
+        open_file_table[i].inum = 0;
+        open_file_table[i].pos = 0;
+    }
+    initialized = 1;
+}
+
+/*
+ * Prepare new file descriptor using lowest available fd using file data.
+ * Return -1 if open file table is all filled up.
+ */
+FileDescriptor *CreateFileDescriptor() {
+    int i;
+    if (initialized == 0) IntializeOpenFileTable();
+    for (i = 0; i < MAX_OPEN_FILES; i++) {
+        if (open_file_table[i].used == 0) {
+            open_file_table[i].used = 1;
+            break;
+        }
+    }
+    if (i >= MAX_OPEN_FILES) return NULL;
+    return &open_file_table[i];
+}
+
+/*
+ * Close file descriptor. Return -1 if fd is invalid.
+ */
+int CloseFileDescriptor(int fd_id) {
+    if (initialized == 0) return -1;
+    if (fd_id < 0 || fd_id >= MAX_OPEN_FILES) return -1;
+    if (open_file_table[fd_id].used != 0) {
+        open_file_table[fd_id].used = 0;
+        return 0;
+    }
+    return -1;
+}
+
+/*
+ * Get file descriptor. Return NULL if fd is invalid.
+ */
+FileDescriptor *GetFileDescriptor(int fd_id) {
+    if (initialized == 0) return NULL;
+    if (fd_id < 0 || fd_id >= MAX_OPEN_FILES) return NULL;
+    if (open_file_table[fd_id].used == 0) return NULL;
+    return &open_file_table[fd_id];
+}
+
+
 
 /*
  * Simple helper for getting block count with inode->size
