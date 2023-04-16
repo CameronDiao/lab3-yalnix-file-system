@@ -11,7 +11,6 @@
 #include "packet.h"
 #include "dirname.h"
 
-#define DEBUG 0
 #define DIRSIZE             (int)sizeof(struct dir_entry)
 #define MAX_DIRECT_SIZE     BLOCKSIZE * NUM_DIRECT
 #define MAX_INDIRECT_SIZE   BLOCKSIZE * (BLOCKSIZE / sizeof(int))
@@ -37,83 +36,6 @@ int GetBlockCount(int size) {
     return block_count;
 }
 
-/*
- * Print Everything inside Inode for Debugging purpose
- */
-void PrintInode(struct inode *inode) {
-    int i;
-    int j;
-    int block_count;
-    int dir_count;
-    int inner_count;
-    int block_id;
-    struct dir_entry *block;
-    char *char_block;
-    int *indirect_block;
-
-    printf("----- Printing Inode -----\n");
-    printf("inode->type: %d\n", inode->type);
-    printf("inode->nlink: %d\n", inode->nlink);
-    printf("inode->reuse: %d\n", inode->reuse);
-    printf("inode->size: %d\n", inode->size);
-
-    if (inode->type == INODE_DIRECTORY) {
-        dir_count = GET_DIR_COUNT(inode->size);
-        printf("dir_count: %d\n", dir_count);
-    }
-
-    block_count = GetBlockCount(inode->size);
-    printf("block_count: %d\n", block_count);
-
-    if (inode->size >= MAX_DIRECT_SIZE) {
-        indirect_block = GetBlock(inode->indirect)->block;
-        printf("indirect blocks %d:\n", inode->indirect);
-        for (i = 0; i < block_count - NUM_DIRECT; i++) {
-            printf("\t- %d\n", indirect_block[i]);
-        }
-    }
-
-    for (i = 0; i < block_count; i++) {
-        if (i >= NUM_DIRECT) {
-            block_id = indirect_block[i - NUM_DIRECT];
-            printf("indirect[%d]: %d\n", i - NUM_DIRECT, block_id);
-        } else {
-            block_id = inode->direct[i];
-            printf("direct[%d]: %d\n", i, block_id);
-        }
-
-        if (block_id == 0) continue;
-        if (inode->type == INODE_DIRECTORY) {
-            block = GetBlock(block_id)->block;
-            if ((i + 1) * BLOCKSIZE > inode->size) {
-                inner_count = dir_count % DIR_PER_BLOCK;
-            } else {
-                inner_count = DIR_PER_BLOCK;
-            }
-            for (j = 0; j < inner_count; j++) {
-                printf("\t- inum: %d\n", block[j].inum);
-                printf("\t- name: %s\n", block[j].name);
-            }
-        }
-
-        if (inode->type == INODE_REGULAR) {
-            char_block = GetBlock(block_id)->block;
-            if ((i + 1) * BLOCKSIZE > inode->size) {
-                inner_count = inode->size % BLOCKSIZE;
-            } else {
-                inner_count = BLOCKSIZE;
-            }
-
-            printf("----- Printing Block -----\n");
-            for (j = 0; j < inner_count; j++) {
-                printf("%c", char_block[j]);
-            }
-            printf("\n----- End of Block -----\n");
-        }
-    }
-
-    printf("----- End of Inode -----\n");
-}
 
 /**
  * Searches for a value in an array, if it's found swaps it with the value
@@ -257,7 +179,6 @@ struct inode* CreateFileInode(int new_inum, int parent_inum, short type) {
  * Truncate file inode
  */
 struct inode* TruncateFileInode(int target_inum) {
-    if (DEBUG) printf("Truncating %d\n", target_inum);
     struct inode_cache_entry *entry = GetInode(target_inum);
     struct inode *inode = entry->inode;
     struct block_cache_entry *indirect_block_entry;
@@ -279,19 +200,16 @@ struct inode* TruncateFileInode(int target_inum) {
         indirect_block_entry->dirty = 1;
         for (i = 0; i < block_count - NUM_DIRECT; i++) {
             if (indirect_block[i] != 0) {
-                if (DEBUG) printf("Freed block: %d\n", indirect_block[i]);
                 PushToBuffer(free_block_list, indirect_block[i]);
             }
         }
         if (inode->indirect != 0) {
-            if (DEBUG) printf("Freed block: %d\n", inode->indirect);
             PushToBuffer(free_block_list, inode->indirect);
         }
     }
 
     for (i = 0; i < iterate_count; i++) {
         if (inode->direct[i] != 0) {
-            if (DEBUG) printf("Freed block: %d\n", inode->direct[i]);
             PushToBuffer(free_block_list, inode->direct[i]);
         }
     }
@@ -379,7 +297,6 @@ int RegisterDirectory(struct inode* parent_inode, int new_inum, char *dirname) {
             parent_inode->direct[outer_index] = PopFromBuffer(free_block_list);
         }
 
-        if (DEBUG) printf("parent_inode->direct[outer_index]: %d\n", parent_inode->direct[outer_index]);
         block_entry = GetBlock(parent_inode->direct[outer_index]);
         block = block_entry->block;
     }
@@ -508,17 +425,14 @@ int CleanDirectory(struct inode *inode) {
             if (prev_index > 0) {
                 if (prev_index >= NUM_DIRECT) {
                     if (indirect_block[outer_index - NUM_DIRECT] != 0) {
-                        if (DEBUG) printf("Freeing block: %d\n", indirect_block[prev_index - NUM_DIRECT]);
                         PushToBuffer(free_block_list, indirect_block[prev_index - NUM_DIRECT]);
                     }
 
                     /* Need to free indirect block as well */
                     if (prev_index == NUM_DIRECT && inode->indirect != 0) {
-                        if (DEBUG) printf("Freeing block: %d\n", inode->indirect);
                         PushToBuffer(free_block_list, inode->indirect);
                     }
                 } else if (inode->direct[prev_index] != 0) {
-                    if (DEBUG) printf("Freeing block: %d\n", inode->direct[prev_index]);
                     PushToBuffer(free_block_list, inode->direct[prev_index]);
                 }
             }
@@ -567,11 +481,6 @@ void SearchFile(void *packet, int pid) {
     ((FilePacket *)packet)->inum = 0;
 
     if (CopyFrom(pid, dirname, target, DIRNAMELEN) < 0) return;
-
-    if (DEBUG) {
-        printf("SearchFile - inum: %d\n", inum);
-        printf("SearchFile - dirname: %s\n", dirname);
-    }
     parent_inode = GetInode(inum)->inode;
 
 
@@ -625,11 +534,6 @@ void CreateFile(void *packet, int pid, short type) {
         return;
     }
 
-    if (DEBUG) {
-        printf("Printing parent inode %d before creating new file\n", parent_inum);
-        PrintInode(parent_inode);
-    }
-
     int target_inum = SearchDirectory(parent_inode, dirname);
     if (target_inum > 0) {
         new_inode = TruncateFileInode(target_inum);
@@ -656,12 +560,6 @@ void CreateFile(void *packet, int pid, short type) {
         /* Child directory refers to parent via .. */
         if (type == INODE_DIRECTORY) parent_inode->nlink += 1;
         parent_entry->dirty = RegisterDirectory(parent_inode, target_inum, dirname);
-
-        if (DEBUG) {
-            printf("Printing parent inode %d after creating new file\n", parent_inum);
-            PrintInode(parent_inode);
-        }
-
         new_inode->nlink += 1;
     }
 
@@ -679,13 +577,6 @@ void ReadFile(DataPacket *packet, int pid) {
     int reuse = packet->arg4;
     void *buffer = packet->pointer;
     struct inode *inode;
-
-    if (DEBUG) {
-        printf("ReadFile - inum: %d\n", inum);
-        printf("ReadFile - pos: %d\n", pos);
-        printf("ReadFile - size: %d\n", size);
-        printf("ReadFile - reuse: %d\n", reuse);
-    }
 
     /* Bleach packet for reuse */
     memset(packet, 0, PACKET_SIZE);
@@ -718,12 +609,6 @@ void ReadFile(DataPacket *packet, int pid) {
     int end_index = (pos + size) / BLOCKSIZE; /* Block index where writing ends */
     /* ex) if pos = 0 and size = 512, it should only iterate 0 ~ 0 */
     if ((pos + size) % BLOCKSIZE == 0) end_index--;
-
-    if (DEBUG) {
-        printf("start_index: %d\n", start_index);
-        printf("end_index: %d\n", end_index);
-        printf("inode_block_count: %d\n", inode_block_count);
-    }
 
     /* Just in case there is a hole */
     char hole_buffer[BLOCKSIZE];
@@ -766,19 +651,11 @@ void ReadFile(DataPacket *packet, int pid) {
             copysize = size - copied_size;
         }
 
-        if (DEBUG) {
-            printf("CopyTo - prefix: %d\n", prefix);
-            printf("CopyTo - copied_size: %d\n", copied_size);
-            printf("CopyTo - copysize: %d\n", copysize);
-        }
-
         if (copysize > 0) {
             CopyTo(pid, buffer + copied_size, block + prefix, copysize);
             copied_size += copysize;
         }
     }
-
-    if (DEBUG) printf("Final copied size: %d\n", copied_size);
     packet->arg1 = copied_size;
 }
 
@@ -792,13 +669,6 @@ void WriteFile(DataPacket *packet, int pid) {
     struct inode_cache_entry *inode_entry;
     struct inode *inode;
     char *block;
-
-    if (DEBUG) {
-        printf("WriteFile - inum: %d\n", inum);
-        printf("WriteFile - pos: %d\n", pos);
-        printf("WriteFile - size: %d\n", size);
-        printf("WriteFile - reuse: %d\n", reuse);
-    }
 
     /* Bleach packet for reuse */
     memset(packet, 0, PACKET_SIZE);
@@ -845,13 +715,6 @@ void WriteFile(DataPacket *packet, int pid) {
     int outer_index = start_index;
     if (outer_index < inode_block_count) outer_index = inode_block_count;
 
-    if (DEBUG) {
-        printf("outer_index: %d\n", outer_index);
-        printf("start_index: %d\n", start_index);
-        printf("end_index: %d\n", end_index);
-        printf("inode_block_count: %d\n", inode_block_count);
-    }
-
     /* Test compute number of additional blocks needed */
     int extra_blocks = 0;
     int i;
@@ -896,17 +759,14 @@ void WriteFile(DataPacket *packet, int pid) {
                 if (outer_index >= NUM_DIRECT) {
                     /* Create new block in indirect block. */
                     indirect_block[outer_index - NUM_DIRECT] = PopFromBuffer(free_block_list);
-                    if (DEBUG) printf("Create new block for indirect: %d (block: %d)\n", outer_index - NUM_DIRECT, indirect_block[outer_index - NUM_DIRECT]);
                     block = GetBlock(indirect_block[outer_index - NUM_DIRECT])->block;
                     memset(block, 0, BLOCKSIZE);
                 } else {
                     /* Create new block at direct */
                     inode->direct[outer_index] = PopFromBuffer(free_block_list);
-                    if (DEBUG) printf("Create new block at outer_index: %d (block: %d)\n", outer_index, inode->direct[outer_index]);
                     block = GetBlock(inode->direct[outer_index])->block;
                     memset(block, 0, BLOCKSIZE);
                     inode_entry->dirty = 1;
-                    if (DEBUG) printf("inode->direct[outer_index]: %d\n", inode->direct[outer_index]);
                 }
             }
         }
@@ -923,11 +783,6 @@ void WriteFile(DataPacket *packet, int pid) {
      * If start writing from index 1, then block size is 512+.
      */
     int new_size = start_index * BLOCKSIZE;
-
-    if (DEBUG) {
-        printf("start_index: %d\n", start_index);
-        printf("end_index: %d\n", end_index);
-    }
 
     for (outer_index = start_index; outer_index <= end_index; outer_index++) {
         if (outer_index >= NUM_DIRECT) {
@@ -955,32 +810,16 @@ void WriteFile(DataPacket *packet, int pid) {
             copysize = size - copied_size;
         }
 
-        if (DEBUG) {
-            printf("Copyfrom - prefix: %d\n", prefix);
-            printf("Copyfrom - copied_size: %d\n", copied_size);
-            printf("Copyfrom - copysize: %d\n", copysize);
-        }
-
         CopyFrom(pid, block + prefix, buffer + copied_size, copysize);
         copied_size += copysize;
         block_entry->dirty = 1;
     }
     new_size += copied_size;
-    if (DEBUG) {
-        printf("Final copied size: %d\n", copied_size);
-        printf("Old file size: %d\n", inode->size);
-        printf("New file size: %d\n", new_size);
-    }
     if (new_size > inode->size) {
         inode->size = new_size;
         inode_entry->dirty = 1;
     }
     packet->arg1 = copied_size;
-
-    if (DEBUG) {
-        printf("Priting inode %d after write file\n", inum);
-        PrintInode(inode);
-    }
 }
 
 void DeleteDir(DataPacket *packet) {
@@ -990,11 +829,6 @@ void DeleteDir(DataPacket *packet) {
     struct inode *target_inode;
     int target_inum = packet->arg1;
     int parent_inum = packet->arg2;
-
-    if (DEBUG) {
-        printf("DeleteDir - target_inum: %d\n", target_inum);
-        printf("DeleteDir - parent_inum: %d\n", parent_inum);
-    }
 
     if (target_inum == ROOTINODE) {
         packet->arg1 = -1;
@@ -1060,11 +894,6 @@ void DeleteDir(DataPacket *packet) {
         }
         block[i].inum = 0;
     }
-
-    if (DEBUG) {
-        printf("Parent inode after dir is deleted.\n");
-        PrintInode(parent_inode);
-    }
 }
 
 void CreateLink(DataPacket *packet, int pid) {
@@ -1118,11 +947,6 @@ void CreateLink(DataPacket *packet, int pid) {
     parent_entry->dirty = RegisterDirectory(parent_inode, target_inum, dirname);
     target_inode->nlink += 1;
     target_entry->dirty = 1;
-
-    if (DEBUG) {
-        printf("Parent inode after link is created.");
-        PrintInode(parent_inode);
-    }
 }
 
 void DeleteLink(DataPacket *packet) {
@@ -1162,18 +986,12 @@ void DeleteLink(DataPacket *packet) {
     /* Target Inode is linked no more */
     if (target_inode->nlink == 0) {
         TruncateFileInode(target_inum);
-        if (DEBUG) printf("Deleting inode: %d\n", target_inum);
         target_inode->type = INODE_FREE;
         PushToBuffer(free_inode_list, target_inum);
     }
 
     /* Clean parent directory */
     parent_entry->dirty = CleanDirectory(parent_inode);
-
-    if (DEBUG) {
-        printf("Parent inode after link is deleted.\n");
-        PrintInode(parent_inode);
-    }
 }
 
 /**
@@ -1189,7 +1007,6 @@ void SyncCache() {
     for (inode = inode_stack->top; inode != NULL; inode = inode->next_lru) {
         if (inode->dirty) {
             struct block_cache_entry* inode_block_entry = GetBlock((inode->inum / 8) + 1);
-            if (DEBUG) printf("Syncing Inode %d to block %d\n",inode->inum,inode_block_entry->block_number);
             void* inode_block = inode_block_entry->block;
             inode_block_entry->dirty = 1;
             struct inode* overwrite = (struct inode *)inode_block + (inode->inum % 8);
@@ -1204,7 +1021,6 @@ void SyncCache() {
     struct block_cache_entry* block;
     for (block = block_stack->top; block != NULL; block = block->next_lru) {
         if (block->dirty) {
-            if (DEBUG) printf("Syncing Block %d\n",block->block_number);
             WriteSector(block->block_number,block->block);
             block->dirty = 0;
         }
@@ -1227,11 +1043,6 @@ int main(int argc, char **argv) {
     block_stack = CreateBlockCache(header->num_blocks);
     GetFreeInodeList();
     GetFreeBlockList();
-
-    if (DEBUG) {
-        printf("Printing root before starting server\n");
-        PrintInode(GetInode(ROOTINODE)->inode);
-    }
 
     int pid;
   	if ((pid = Fork()) < 0) {
@@ -1257,43 +1068,33 @@ int main(int argc, char **argv) {
 
         switch (((UnknownPacket *)packet)->packet_type) {
             case MSG_GET_FILE:
-                if (DEBUG) printf("MSG_GET_FILE received from pid: %d\n", pid);
                 GetFile(packet);
                 break;
             case MSG_SEARCH_FILE:
-                if (DEBUG) printf("MSG_SEARCH_FILE received from pid: %d\n", pid);
                 SearchFile(packet, pid);
                 break;
             case MSG_CREATE_FILE:
-                if (DEBUG) printf("MSG_CREATE_FILE received from pid: %d\n", pid);
                 CreateFile(packet, pid, INODE_REGULAR);
                 break;
             case MSG_READ_FILE:
-                if (DEBUG) printf("MSG_READ_FILE received from pid: %d\n", pid);
                 ReadFile(packet, pid);
                 break;
             case MSG_WRITE_FILE:
-                if (DEBUG) printf("MSG_WRITE_FILE received from pid: %d\n", pid);
                 WriteFile(packet, pid);
                 break;
             case MSG_CREATE_DIR:
-                if (DEBUG) printf("MSG_CREATE_DIR received from pid: %d\n", pid);
                 CreateFile(packet, pid, INODE_DIRECTORY);
                 break;
             case MSG_DELETE_DIR:
-                if (DEBUG) printf("MSG_DELETE_DIR received from pid: %d\n", pid);
                 DeleteDir(packet);
                 break;
             case MSG_LINK:
-                if (DEBUG) printf("MSG_LINK received from pid: %d\n", pid);
                 CreateLink(packet, pid);
                 break;
             case MSG_UNLINK:
-                if (DEBUG) printf("MSG_UNLINK received from pid: %d\n", pid);
                 DeleteLink(packet);
                 break;
             case MSG_SYNC:
-                if (DEBUG) printf("MSG_SYNC received from pid: %d\n", pid);
                 SyncCache();
                 if (((DataPacket *)packet)->arg1 == 1) {
                     Reply(packet, pid);
