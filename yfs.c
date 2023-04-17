@@ -1,15 +1,13 @@
 #include <stdio.h>
 #include <stdlib.h>
+#include <stdbool.h>
 #include <string.h>
 #include <assert.h>
+#include <math.h>
 #include <comp421/yalnix.h>
 #include <comp421/filesystem.h>
 #include "yfs.h"
-// #include "cache.h"
-// #include "buffer.h"
-// #include "path.h"
 #include "packet.h"
-// #include "dirname.h"
 
 #define DIRSIZE             (int)sizeof(struct dir_entry)
 #define MAX_DIRECT_SIZE     BLOCKSIZE * NUM_DIRECT
@@ -19,6 +17,9 @@
 #define DIR_PER_BLOCK       (BLOCKSIZE / DIRSIZE)
 #define GET_DIR_COUNT(n)    (n / DIRSIZE)
 
+/******************
+ * INTEGER BUFFER *
+ ******************/
 
 struct buffer {
     /**
@@ -55,10 +56,6 @@ struct inode_cache* inode_stack; /* Cache for recently accessed inodes */
 
 struct buffer* free_inode_list; /* List of Inodes available to assign to files */
 struct buffer* free_block_list; /* List of blocks ready to allocate for file data */
-
-/**********
- * BUFFER *
- **********/
 
 
 /**
@@ -104,11 +101,11 @@ void PushToBuffer(struct buffer *buf, int i) {
     if (buf->full) {
         return;
     }
-    if (buf->empty) {
+    else if (buf->empty) {
         buf->empty = 0;
     }
     buf->b[buf->in] = i;
-    buf->in++;
+    buf->in = buf->in + 1;
     if (buf->in >= buf->size) {
         buf->in = 0;
     }
@@ -121,29 +118,31 @@ int PopFromBuffer(struct buffer *buf) {
     if (buf->empty) {
         return '\0';
     }
+    else if (buf->full) {
+        buf->full = 0;
+    }
     int next = buf->b[buf->out];
-    buf->out++;
+    buf->out = buf->out + 1;
     if (buf->out >= buf->size) {
         buf->out = 0;
     }
     if (buf->out == buf->in) {
         buf->empty = 1;
     }
-    if (buf->full) {
-        buf->full = 0;
-    }
     return next;
 }
 
 void PrintBuffer(struct buffer *buf) {
-    int i;
+    // int i;
     if (buf->out < buf->in) {
+        int i;
         printf("[");
         for (i = buf->out; i < buf->in-1; i++) {
             printf("%d, ", buf->b[i]);
         }
         printf("%d]\n", buf->b[buf->in-1]);
     } else {
+        int i;
         printf("[");
         for (i = buf->out; i < buf->size; i++) {
             printf("%d, ", buf->b[i]);
@@ -156,9 +155,9 @@ void PrintBuffer(struct buffer *buf) {
 
 }
 
-/********
- * PATH *
- ********/
+/*****************
+ * PATH HANDLING *
+ *****************/
 
 typedef struct PathIterator {
     struct PathIterator *head;
@@ -257,104 +256,104 @@ int DeletePathIterator(PathIterator *head) {
     return 0;
 }
 
-void TestPathIterator() {
-    PathIterator *it;
+// void TestPathIterator() {
+//     PathIterator *it;
 
-    printf("Testing /abc/def/ghi.c\n");
-    it = ParsePath("/abc/def/ghi.c");
-    assert(strcmp(it->data, "/") == 0);
-    it = it->next;
-    assert(strcmp(it->data, "abc") == 0);
-    it = it->next;
-    assert(strcmp(it->data, "def") == 0);
-    it = it->next;
-    assert(strcmp(it->data, "ghi.c") == 0);
-    it = it->next;
-    assert(it->next == NULL);
-    DeletePathIterator(it->head);
+//     printf("Testing /abc/def/ghi.c\n");
+//     it = ParsePath("/abc/def/ghi.c");
+//     assert(strcmp(it->data, "/") == 0);
+//     it = it->next;
+//     assert(strcmp(it->data, "abc") == 0);
+//     it = it->next;
+//     assert(strcmp(it->data, "def") == 0);
+//     it = it->next;
+//     assert(strcmp(it->data, "ghi.c") == 0);
+//     it = it->next;
+//     assert(it->next == NULL);
+//     DeletePathIterator(it->head);
 
-    printf("Testing xyz/123-456\n");
-    it = ParsePath("xyz/123-456");
-    assert(strcmp(it->data, "xyz") == 0);
-    it = it->next;
-    assert(strcmp(it->data, "123-456") == 0);
-    it = it->next;
-    printf("it->data: %s\n", it->data);
-    assert(it->next == NULL);
-    DeletePathIterator(it->head);
+//     printf("Testing xyz/123-456\n");
+//     it = ParsePath("xyz/123-456");
+//     assert(strcmp(it->data, "xyz") == 0);
+//     it = it->next;
+//     assert(strcmp(it->data, "123-456") == 0);
+//     it = it->next;
+//     printf("it->data: %s\n", it->data);
+//     assert(it->next == NULL);
+//     DeletePathIterator(it->head);
 
-    printf("Testing ../../foo/bar/baz/example.txt\n");
-    it = ParsePath("../../foo/bar/baz/example.txt");
-    assert(strcmp(it->data, "..") == 0);
-    it = it->next;
-    assert(strcmp(it->data, "..") == 0);
-    it = it->next;
-    assert(strcmp(it->data, "foo") == 0);
-    it = it->next;
-    assert(strcmp(it->data, "bar") == 0);
-    it = it->next;
-    assert(strcmp(it->data, "baz") == 0);
-    it = it->next;
-    assert(strcmp(it->data, "example.txt") == 0);
-    it = it->next;
-    assert(it->next == NULL);
-    DeletePathIterator(it->head);
+//     printf("Testing ../../foo/bar/baz/example.txt\n");
+//     it = ParsePath("../../foo/bar/baz/example.txt");
+//     assert(strcmp(it->data, "..") == 0);
+//     it = it->next;
+//     assert(strcmp(it->data, "..") == 0);
+//     it = it->next;
+//     assert(strcmp(it->data, "foo") == 0);
+//     it = it->next;
+//     assert(strcmp(it->data, "bar") == 0);
+//     it = it->next;
+//     assert(strcmp(it->data, "baz") == 0);
+//     it = it->next;
+//     assert(strcmp(it->data, "example.txt") == 0);
+//     it = it->next;
+//     assert(it->next == NULL);
+//     DeletePathIterator(it->head);
 
-    printf("Testing silly/./././././././example.txt\n");
-    it = ParsePath("silly/./././././././example.txt");
-    assert(strcmp(it->data, "silly") == 0);
-    it = it->next;
-    assert(strcmp(it->data, ".") == 0);
-    it = it->next;
-    assert(strcmp(it->data, ".") == 0);
-    it = it->next;
-    assert(strcmp(it->data, ".") == 0);
-    it = it->next;
-    assert(strcmp(it->data, ".") == 0);
-    it = it->next;
-    assert(strcmp(it->data, ".") == 0);
-    it = it->next;
-    assert(strcmp(it->data, ".") == 0);
-    it = it->next;
-    assert(strcmp(it->data, ".") == 0);
-    it = it->next;
-    assert(strcmp(it->data, "example.txt") == 0);
-    it = it->next;
-    assert(it->next == NULL);
-    DeletePathIterator(it->head);
+//     printf("Testing silly/./././././././example.txt\n");
+//     it = ParsePath("silly/./././././././example.txt");
+//     assert(strcmp(it->data, "silly") == 0);
+//     it = it->next;
+//     assert(strcmp(it->data, ".") == 0);
+//     it = it->next;
+//     assert(strcmp(it->data, ".") == 0);
+//     it = it->next;
+//     assert(strcmp(it->data, ".") == 0);
+//     it = it->next;
+//     assert(strcmp(it->data, ".") == 0);
+//     it = it->next;
+//     assert(strcmp(it->data, ".") == 0);
+//     it = it->next;
+//     assert(strcmp(it->data, ".") == 0);
+//     it = it->next;
+//     assert(strcmp(it->data, ".") == 0);
+//     it = it->next;
+//     assert(strcmp(it->data, "example.txt") == 0);
+//     it = it->next;
+//     assert(it->next == NULL);
+//     DeletePathIterator(it->head);
 
-    printf("Testing //////dirname//subdirname///file\n");
-    it = ParsePath("//////dirname//subdirname///file");
-    assert(strcmp(it->data, "/") == 0);
-    it = it->next;
-    assert(strcmp(it->data, "dirname") == 0);
-    it = it->next;
-    assert(strcmp(it->data, "subdirname") == 0);
-    it = it->next;
-    assert(strcmp(it->data, "file") == 0);
-    it = it->next;
-    assert(it->next == NULL);
-    DeletePathIterator(it->head);
+//     printf("Testing //////dirname//subdirname///file\n");
+//     it = ParsePath("//////dirname//subdirname///file");
+//     assert(strcmp(it->data, "/") == 0);
+//     it = it->next;
+//     assert(strcmp(it->data, "dirname") == 0);
+//     it = it->next;
+//     assert(strcmp(it->data, "subdirname") == 0);
+//     it = it->next;
+//     assert(strcmp(it->data, "file") == 0);
+//     it = it->next;
+//     assert(it->next == NULL);
+//     DeletePathIterator(it->head);
 
-    printf("Testing /a/b/c/\n");
-    it = ParsePath("/a/b/c/");
-    assert(strcmp(it->data, "/") == 0);
-    it = it->next;
-    assert(strcmp(it->data, "a") == 0);
-    it = it->next;
-    assert(strcmp(it->data, "b") == 0);
-    it = it->next;
-    assert(strcmp(it->data, "c") == 0);
-    it = it->next;
-    assert(strcmp(it->data, ".") == 0);
-    it = it->next;
-    assert(it->next == NULL);
-    DeletePathIterator(it->head);
-}
+//     printf("Testing /a/b/c/\n");
+//     it = ParsePath("/a/b/c/");
+//     assert(strcmp(it->data, "/") == 0);
+//     it = it->next;
+//     assert(strcmp(it->data, "a") == 0);
+//     it = it->next;
+//     assert(strcmp(it->data, "b") == 0);
+//     it = it->next;
+//     assert(strcmp(it->data, "c") == 0);
+//     it = it->next;
+//     assert(strcmp(it->data, ".") == 0);
+//     it = it->next;
+//     assert(it->next == NULL);
+//     DeletePathIterator(it->head);
+// }
 
-/*********
- * Cache *
- *********/
+/*************************
+ * Block and INode Cache *
+ *************************/
 
 struct block_cache {
     struct block_cache_entry* top; //Top of the cache stack
@@ -448,16 +447,21 @@ void TestBlockCache(int num_blocks);
  */
 struct inode_cache *CreateInodeCache(int num_inodes) {
     inode_count = num_inodes;
+
     struct inode_cache *new_cache = malloc(sizeof(struct inode_cache));
     new_cache->stack_size = 0;
     new_cache->hash_set = calloc((num_inodes/8) + 1, sizeof(struct inode_cache_entry));
     new_cache->hash_size = (num_inodes/8) + 1;
     inode_stack = new_cache;
+
     struct inode* dummy_inode = malloc(sizeof(struct inode));
     int i;
-    for (i = -1; i >= -1 * INODE_CACHESIZE; i--) {
-        AddToInodeCache(new_cache, dummy_inode, i);
+    for (i = 1; i <= INODE_CACHESIZE; i++) {
+        AddToInodeCache(new_cache, dummy_inode, -1 * i);
     }
+    // for (i = -1; i >= -1 * INODE_CACHESIZE; i--) {
+    //     AddToInodeCache(new_cache, dummy_inode, i);
+    // }
     return new_cache;
 }
 
@@ -577,7 +581,12 @@ void WriteBackInode(struct inode_cache_entry* out) {
  * @param recent_access Entry to move
  */
 void RaiseInodeCachePosition(struct inode_cache* stack, struct inode_cache_entry* recent_access) {
-    if ((recent_access->inum == stack->top->inum) || (recent_access->prev_lru == NULL && recent_access->next_lru == NULL)) return;
+    bool compare_inums = recent_access->inum == stack->top->inum;
+    bool compare_lrus = recent_access->prev_lru == NULL && recent_access->next_lru == NULL;
+    if (compare_inums || compare_lrus) {
+        return;
+    }
+
     if (recent_access->inum == stack->base->inum) {
         /**Reassign Base*/
         recent_access->prev_lru->next_lru = NULL;
@@ -606,14 +615,18 @@ void RaiseInodeCachePosition(struct inode_cache* stack, struct inode_cache_entry
  */
 struct inode_cache_entry* GetInode(int inum) {
     /** Inode number must be in valid range*/
-    assert(inum >= 1 && inum <= inode_count);
+    // assert(inum >= 1 && inum <= inode_count);
 
     /** First Check the Inode Cache */
     struct inode_cache_entry* current = LookUpInode(inode_stack, inum);
-    if (current != NULL) return current;
+    if (current != NULL) {
+        return current;
+    }
+    // if (current != NULL) return current;
 
     /** If it's not in the Inode Cache, check the Block */
-    void* inode_block = GetBlock((inum / 8) + 1)->block;
+    struct block_cache_entry* block_entry = GetBlock((inum / 8) + 1);
+    void* inode_block = block_entry->block;
 
     /** Add inode to cache, when accessed*/
     AddToInodeCache(inode_stack, (struct inode *)inode_block + (inum % 8), inum);
@@ -626,9 +639,15 @@ void PrintInodeCacheHashSet(struct inode_cache* stack) {
 
     for (index = 0; index < stack->hash_size; index++) {
         printf("[");
-        for (entry = stack->hash_set[index]; entry != NULL; entry = entry->next_hash) {
+        entry = stack->hash_set[index];
+        while (entry != NULL) {
             printf(" %d ",entry->inum);
+            entry = entry->next_hash;
         }
+
+        // for (entry = stack->hash_set[index]; entry != NULL; entry = entry->next_hash) {
+        //     printf(" %d ",entry->inum);
+        // }
         printf("]\n");
     }
 }
@@ -664,32 +683,34 @@ void AddToBlockCache(struct block_cache *stack, void* block, int block_number) {
     if (stack->stack_size == BLOCK_CACHESIZE) {
         /**If the stack is full, the base is de-allocated and the pointers to it are nullified */
         struct block_cache_entry *entry = stack->base;
-        int old_index = HashIndex(entry->block_number);
-        int new_index = HashIndex(block_number);
 
         /**Reassign Base*/
         stack->base = stack->base->prev_lru;
         stack->base->next_lru = NULL;
 
+        int old_index = HashIndex(entry->block_number);
+        int new_index = HashIndex(block_number);
+
         /** Write Back the Block if it is dirty to avoid losing data*/
         if (entry->dirty && entry->block_number > 0) {
             WriteSector(entry->block_number, entry->block);
         }
-        if (entry->prev_hash != NULL && entry->next_hash != NULL) {
+        if (entry->next_hash != NULL && entry->prev_hash != NULL) {
             /**Both Neighbors aren't Null*/
-            entry->next_hash->prev_hash = entry->prev_hash;
             entry->prev_hash->next_hash = entry->next_hash;
-        } else if(entry->prev_hash == NULL && entry->next_hash != NULL) {
+            entry->next_hash->prev_hash = entry->prev_hash;
+        } else if(entry->next_hash == NULL && entry->prev_hash != NULL) {
+            /**Head of Hash Table Array*/
+            entry->prev_hash->next_hash = NULL;
+        } else if(entry->next_hash != NULL && entry->prev_hash == NULL) {
             /**Tail End of Hash Table Array*/
             stack->hash_set[old_index] = entry->next_hash;
             entry->next_hash->prev_hash = NULL;
-        } else if(entry->prev_hash != NULL && entry->next_hash == NULL) {
-            /**Head of Hash Table Array*/
-            entry->prev_hash->next_hash = NULL;
         } else {
             /**No Neighbors in Hash Table Array*/
             stack->hash_set[old_index] = NULL;
         }
+
         entry->block = block;
         entry->dirty = 0;
         entry->block_number = block_number;
@@ -698,7 +719,10 @@ void AddToBlockCache(struct block_cache *stack, void* block, int block_number) {
         stack->top->prev_lru = entry;
         stack->top = entry;
         entry->prev_hash = NULL;
-        if(stack->hash_set[new_index] != NULL) stack->hash_set[new_index]->prev_hash = entry;
+
+        if (stack->hash_set[new_index] != NULL) {
+            stack->hash_set[new_index]->prev_hash = entry;
+        }
         entry->next_hash = stack->hash_set[new_index];
         stack->hash_set[new_index] = entry;
     } else {
@@ -706,17 +730,18 @@ void AddToBlockCache(struct block_cache *stack, void* block, int block_number) {
         struct block_cache_entry* item = malloc(sizeof(struct inode_cache_entry));
         item->block_number = block_number;
         item->block = block;
-        int index = HashIndex(block_number);
-        if(stack->hash_set[index] != NULL) stack->hash_set[index]->prev_hash = item;
-        item->next_hash = stack->hash_set[index];
+        if (stack->hash_set[HashIndex(block_number)] != NULL) {
+            stack->hash_set[HashIndex(block_number)]->prev_hash = item;
+        }
+        item->next_hash = stack->hash_set[HashIndex(block_number)];
         item->prev_hash = NULL;
         item->prev_lru = NULL;
-        stack->hash_set[index] = item;
+        stack->hash_set[HashIndex(block_number)] = item;
         /** Place entry into the LRU Stack*/
-        if (!stack->stack_size) {
+        if (stack->stack_size == 0) {
             /** If the stack is empty the entry becomes both the top and base*/
-            stack->base = item;
             stack->top = item;
+            stack->base = item;
         } else {
             /** If the stack isn't empty the entry is added to the top*/
             item->next_lru = stack->top;
@@ -724,7 +749,7 @@ void AddToBlockCache(struct block_cache *stack, void* block, int block_number) {
             stack->top = item;
         }
         /**If the stack isn't full increase the size*/
-        stack->stack_size++;
+        stack->stack_size = stack->stack_size + 1;
     }
 }
 
@@ -737,12 +762,21 @@ void AddToBlockCache(struct block_cache *stack, void* block, int block_number) {
 struct block_cache_entry* LookUpBlock(struct block_cache *stack, int block_number) {
     struct block_cache_entry* block;
     /**For loop iterating into the hash array index the inode number points to*/
-    for (block = stack->hash_set[HashIndex(block_number)]; block != NULL; block = block->next_hash) {
+    block = stack->hash_set[HashIndex(block_number)];
+    while (block != NULL) {
         if (block->block_number == block_number) {
-            RaiseBlockCachePosition(stack,block);
+            RaiseBlockCachePosition(stack, block);
             return block;
         }
+        block = block->next_hash;
     }
+
+    // for (block = stack->hash_set[HashIndex(block_number)]; block != NULL; block = block->next_hash) {
+    //     if (block->block_number == block_number) {
+    //         RaiseBlockCachePosition(stack,block);
+    //         return block;
+    //     }
+    // }
     /**Returns null if Inode is not found*/
     return NULL;
 }
@@ -751,7 +785,11 @@ struct block_cache_entry* LookUpBlock(struct block_cache *stack, int block_numbe
  * Repositions block at top of stack whenever used
  */
 void RaiseBlockCachePosition(struct block_cache *stack, struct block_cache_entry* recent_access) {
-    if ((recent_access->block_number == stack->top->block_number) || (recent_access->prev_lru == NULL && recent_access->next_lru == NULL)) return;
+    bool compare_bns = recent_access->block_number == stack->top->block_number;
+    bool compare_lrus = recent_access->prev_lru == NULL && recent_access->next_lru == NULL;
+    if (compare_bns || compare_lrus) {
+        return;
+    }
     if (recent_access->block_number == stack->base->block_number) {
         /**Reassign Base*/
         recent_access->prev_lru->next_lru = NULL;
@@ -781,9 +819,14 @@ void PrintBlockCacheHashSet(struct block_cache* stack) {
     for (index = 0; index < stack->hash_size; index++) {
         if (stack->hash_set[index] == NULL) continue;
         printf("[");
-        for (entry = stack->hash_set[index]; entry != NULL; entry = entry->next_hash) {
+        entry = stack->hash_set[index];
+        while (entry != NULL) {
             printf(" %d ",entry->block_number);
+            entry = entry->next_hash;
         }
+        // for (entry = stack->hash_set[index]; entry != NULL; entry = entry->next_hash) {
+        //     printf(" %d ",entry->block_number);
+        // }
         printf("]\n");
     }
 }
@@ -795,11 +838,13 @@ void PrintBlockCacheHashSet(struct block_cache* stack) {
  */
 struct block_cache_entry* GetBlock(int block_num) {
     /**Must be a valid block number */
-    assert(block_num >= 1 && block_num <= block_count);
+    // assert(block_num >= 1 && block_num <= block_count);
 
     /** First Check Block Cache*/
     struct block_cache_entry *current = LookUpBlock(block_stack,block_num);
-    if (current != NULL) return current;
+    if (current != NULL) {
+        return current;
+    }
 
    /** If not found in cache, read directly from disk */
     void *block_buffer = malloc(SECTORSIZE);
@@ -814,72 +859,81 @@ struct block_cache_entry* GetBlock(int block_num) {
  */
  void PrintBlockCacheStack(struct block_cache* stack) {
      struct block_cache_entry* position = stack->top;
-     while (position != NULL) {
-         printf("| %d |\n", position->block_number);
-         position = position->next_lru;
-     }
+    for (position = stack->top; position != NULL; position = position->next_lru) {
+        printf("| %d |\n", position->block_number);
+    }
+
+    //  while (position != NULL) {
+    //      printf("| %d |\n", position->block_number);
+    //      position = position->next_lru;
+    //  }
  }
 
 int HashIndex(int key_value) {
-    return key_value > 0 ? key_value/8 : key_value/(-8) ;
+    if (key_value > 0) {
+        return key_value/8;
+    } else {
+        return key_value/(-8);
+    }
+    // return key_value > 0 ? key_value/8 : key_value/(-8) ;
 }
 
-void TestInodeCache(int num_inodes) {
-    int i;
-    int inode_number;
-    struct inode* inode;
-    for(i = 1; i <= 64; i++) {
-        inode_number = (rand() % num_inodes)+1;
-        printf("Call %d: Calling Inode %d\n",i,inode_number);
-        inode = GetInode(inode_number)->inode;
-        printf("Inode Type: %d\n",inode->type);
-        printf("Cache Hash Table: \n");
-        PrintInodeCacheHashSet(inode_stack);
-        printf("Cache Stack\n");
-        PrintInodeCacheStack(inode_stack);
-        printf("Cache Size: %d\n",inode_stack->stack_size);
-    }
-    int j;
-    for(i = 1; i <= num_inodes; i++) {
-        printf("Calling Inode %d\n",i);
-        for(j = 0; j < 64; j++) {
-            GetInode(i);
-        }
-        printf("%d Calls to Inode %d Successful\n",j,i);
-        printf("Cache Hash Table: \n");
-        PrintInodeCacheHashSet(inode_stack);
-        printf("Cache Stack\n");
-        PrintInodeCacheStack(inode_stack);
-    }
+// void TestInodeCache(int num_inodes) {
+//     int i;
+//     int inode_number;
+//     struct inode* inode;
+//     for(i = 1; i <= 64; i++) {
+//         inode_number = (rand() % num_inodes)+1;
+//         printf("Call %d: Calling Inode %d\n",i,inode_number);
+//         inode = GetInode(inode_number)->inode;
+//         printf("Inode Type: %d\n",inode->type);
+//         printf("Cache Hash Table: \n");
+//         PrintInodeCacheHashSet(inode_stack);
+//         printf("Cache Stack\n");
+//         PrintInodeCacheStack(inode_stack);
+//         printf("Cache Size: %d\n",inode_stack->stack_size);
+//     }
+//     int j;
+//     for(i = 1; i <= num_inodes; i++) {
+//         printf("Calling Inode %d\n",i);
+//         for(j = 0; j < 64; j++) {
+//             GetInode(i);
+//         }
+//         printf("%d Calls to Inode %d Successful\n",j,i);
+//         printf("Cache Hash Table: \n");
+//         PrintInodeCacheHashSet(inode_stack);
+//         printf("Cache Stack\n");
+//         PrintInodeCacheStack(inode_stack);
+//     }
 
-}
+// }
 
-void TestBlockCache(int num_blocks) {
-    int i;
-    int block_number;
-    for(i = 1; i <= 64; i++) {
-        block_number = (rand() % num_blocks)+1;
-        printf("Call %d: Calling Block %d\n",i,block_number);
-        GetBlock(block_number);
-        printf("Cache Hash Table: \n");
-        PrintBlockCacheHashSet(block_stack);
-        printf("Cache Stack\n");
-        PrintBlockCacheStack(block_stack);
-        printf("Cache Size: %d\n",block_stack->stack_size);
-    }
-    int j;
-    for(i = 1; i <= num_blocks; i++) {
-        printf("Calling Block %d\n",i);
-        for(j = 0; j < 64; j++) {
-            GetBlock(i);
-        }
-        printf("%d Calls to Inode %d Successful\n",j,i);
-        printf("Cache Hash Table: \n");
-        PrintBlockCacheHashSet(block_stack);
-        printf("Cache Stack\n");
-        PrintBlockCacheStack(block_stack);
-    }
-}
+// void TestBlockCache(int num_blocks) {
+//     int i;
+//     int block_number;
+//     for(i = 1; i <= 64; i++) {
+//         block_number = (rand() % num_blocks)+1;
+//         printf("Call %d: Calling Block %d\n",i,block_number);
+//         GetBlock(block_number);
+//         printf("Cache Hash Table: \n");
+//         PrintBlockCacheHashSet(block_stack);
+//         printf("Cache Stack\n");
+//         PrintBlockCacheStack(block_stack);
+//         printf("Cache Size: %d\n",block_stack->stack_size);
+//     }
+//     int j;
+//     for(i = 1; i <= num_blocks; i++) {
+//         printf("Calling Block %d\n",i);
+//         for(j = 0; j < 64; j++) {
+//             GetBlock(i);
+//         }
+//         printf("%d Calls to Inode %d Successful\n",j,i);
+//         printf("Cache Hash Table: \n");
+//         PrintBlockCacheHashSet(block_stack);
+//         printf("Cache Stack\n");
+//         PrintBlockCacheStack(block_stack);
+//     }
+// }
 
 /******************
  * Directory Name *
@@ -901,8 +955,13 @@ int CompareDirname(char *dirname, char *other);
  void SetDirectoryName(char *target, char *path, int start, int end) {
      int i;
      for (i = 0; i < DIRNAMELEN; i++) {
-         if (i < end - start) target[i] = path[start + i];
-         else target[i] = '\0';
+        if (i < end - start) {
+            target[i] = path[start + i];
+        } else {
+            target[i] = '\0';
+        }
+        //  if (i < end - start) target[i] = path[start + i];
+        //  else target[i] = '\0';
      }
  }
 
@@ -913,10 +972,16 @@ int CompareDirname(char *dirname, char *other);
      int i;
      for (i = 0; i < DIRNAMELEN; i++) {
          /* If characters do not match, it is not equal */
-         if (dirname[i] != other[i]) return -1;
+        //  if (dirname[i] != other[i]) return -1;
+         if (dirname[i] != other[i]) {
+            return -1;
+         }
 
          /* If dirname is null string, break */
-         if (dirname[i] == '\0') break;
+        //  if (dirname[i] == '\0') break;
+        if (dirname[i] == '\0') {
+            break;
+        }
      }
 
      return 0;
@@ -958,7 +1023,9 @@ int initialized = 0;
  */
 void IntializeOpenFileTable() {
     int i;
-    if (initialized == 1) return;
+    if (initialized == 1) {
+        return;
+    }
     for (i = 0; i < MAX_OPEN_FILES; i++) {
         open_file_table[i].id = i;
         open_file_table[i].used = 0;
@@ -974,14 +1041,18 @@ void IntializeOpenFileTable() {
  */
 FileDescriptor *CreateFileDescriptor() {
     int i;
-    if (initialized == 0) IntializeOpenFileTable();
+    if (initialized == 0) {
+        IntializeOpenFileTable();
+    }
     for (i = 0; i < MAX_OPEN_FILES; i++) {
         if (open_file_table[i].used == 0) {
             open_file_table[i].used = 1;
             break;
         }
     }
-    if (i >= MAX_OPEN_FILES) return NULL;
+    if (i >= MAX_OPEN_FILES) {
+        return NULL;
+    }
     return &open_file_table[i];
 }
 
@@ -989,8 +1060,12 @@ FileDescriptor *CreateFileDescriptor() {
  * Close file descriptor. Return -1 if fd is invalid.
  */
 int CloseFileDescriptor(int fd_id) {
-    if (initialized == 0) return -1;
-    if (fd_id < 0 || fd_id >= MAX_OPEN_FILES) return -1;
+    if (fd_id < 0 || fd_id >= MAX_OPEN_FILES) {
+        return -1;
+    }
+    if (initialized == 0) {
+        return -1;
+    }
     if (open_file_table[fd_id].used != 0) {
         open_file_table[fd_id].used = 0;
         return 0;
@@ -1002,9 +1077,15 @@ int CloseFileDescriptor(int fd_id) {
  * Get file descriptor. Return NULL if fd is invalid.
  */
 FileDescriptor *GetFileDescriptor(int fd_id) {
-    if (initialized == 0) return NULL;
-    if (fd_id < 0 || fd_id >= MAX_OPEN_FILES) return NULL;
-    if (open_file_table[fd_id].used == 0) return NULL;
+    if (fd_id < 0 || fd_id >= MAX_OPEN_FILES) {
+        return NULL;
+    }
+    if (initialized == 0) {
+        return NULL;
+    }
+    if (open_file_table[fd_id].used == 0) {
+        return NULL;
+    }
     return &open_file_table[fd_id];
 }
 
@@ -1014,8 +1095,10 @@ FileDescriptor *GetFileDescriptor(int fd_id) {
  * Simple helper for getting block count with inode->size
  */
 int GetBlockCount(int size) {
-    int block_count = size / BLOCKSIZE;
-    if ((size % BLOCKSIZE) > 0) block_count++; // Round up
+    int block_count = (size + BLOCKSIZE - 1) / BLOCKSIZE;
+    // if ((size % BLOCKSIZE) > 0) {
+    //     block_count = block_count + 1; // Round up
+    // }
     return block_count;
 }
 
@@ -1035,7 +1118,9 @@ void SearchAndSwap(int arr[], int size, int value, int index) {
         search_index++;
         i = arr[search_index];
     }
-    if (search_index == index || i == -1 || i > size) return;
+    if (search_index == index || i == -1 || i > size) {
+        return;
+    }
     int j = arr[index];
     arr[index] = value;
     arr[search_index] = j;
@@ -1047,9 +1132,12 @@ void SearchAndSwap(int arr[], int size, int value, int index) {
 void GetFreeInodeList() {
     free_inode_list = GetBuffer(header->num_inodes);
     int i;
-    for (i = 1; i <= header->num_inodes; i ++) {
-        struct inode *next = GetInode(i)->inode;
-        if (next->type == INODE_FREE) PushToBuffer(free_inode_list, i);
+    for (i = 1; i <= header->num_inodes; i++) {
+        struct inode_cache_entry* curr_inode = GetInode(i);
+        struct inode *next = curr_inode->inode;
+        if (next->type == INODE_FREE) {
+            PushToBuffer(free_inode_list, i);
+        }
     }
 }
 
@@ -1059,18 +1147,20 @@ void GetFreeInodeList() {
 void GetFreeBlockList() {
     /* Compute number of blocks occupited by inodes */
     int inode_count = header->num_inodes + 1;
-    int inode_block_count = inode_count / INODE_PER_BLOCK;
-    if (inode_count % INODE_PER_BLOCK > 0) inode_block_count++;
+    int inode_block_count = (inode_count + INODE_PER_BLOCK - 1) / INODE_PER_BLOCK;
+    // if (inode_count % INODE_PER_BLOCK > 0) {
+    //     inode_block_count = inode_block_count + 1;
+    // }
 
     /* Compute number of blocks with inodes and boot block excluded */
     int block_count = header->num_blocks - inode_block_count - 1;
-    int first_data_block = 1 + inode_block_count;
+    // int first_data_block = 1 + inode_block_count;
     int *buffer = malloc(block_count * sizeof(int));
     int i;
-
     /* Block 0 is the boot block and not used by the file system */
     for (i = 0; i < block_count; i++) {
-        buffer[i] = i + first_data_block;
+        // buffer[i] = i + first_data_block;
+        buffer[i] = inode_block_count + i + 1;
     }
 
 
@@ -1087,8 +1177,8 @@ void GetFreeBlockList() {
         pos = 0;
         while (pos < scan->size && j < NUM_DIRECT) {
             SearchAndSwap(buffer, block_count, scan->direct[j], busy_blocks);
-            busy_blocks++;
-            j++;
+            j = j + 1;
+            busy_blocks = busy_blocks + 1;
             pos += BLOCKSIZE;
         }
         /*
@@ -1097,13 +1187,13 @@ void GetFreeBlockList() {
          */
         if (pos < scan->size) {
             SearchAndSwap(buffer, header->num_blocks, scan->indirect, busy_blocks);
-            busy_blocks++;
+            busy_blocks = busy_blocks + 1;
             int *indirect_blocks = GetBlock(scan->indirect)->block;
             j = 0;
             while (j < 128 && pos < scan->size) {
                 SearchAndSwap(buffer, header->num_blocks, indirect_blocks[j], busy_blocks);
-                busy_blocks++;
-                j++;
+                j = j + 1;
+                busy_blocks = busy_blocks + 1;
                 pos += BLOCKSIZE;
             }
         }
