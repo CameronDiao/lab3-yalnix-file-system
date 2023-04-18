@@ -193,6 +193,23 @@ PathIterator *CreatePathIterator(PathIterator *head) {
     return it;
 }
 
+
+/*
+ * Fills target buffer path + empty strings.
+ */
+ void SetDirectoryName(char *target, char *path, int start, int end) {
+     int i;
+     for (i = 0; i < DIRNAMELEN; i++) {
+        if (i < end - start) {
+            target[i] = path[start + i];
+        } else {
+            target[i] = '\0';
+        }
+        //  if (i < end - start) target[i] = path[start + i];
+        //  else target[i] = '\0';
+     }
+ }
+
 /*
  * Given pathname as Yalnix argument, parse it
  * into a linked list of component.
@@ -947,22 +964,6 @@ int HashIndex(int key_value) {
  * Compare dirname. Return 0 if equal, -1 otherwise.
  */
 int CompareDirname(char *dirname, char *other);
-
-/*
- * Fills target buffer path + empty strings.
- */
- void SetDirectoryName(char *target, char *path, int start, int end) {
-     int i;
-     for (i = 0; i < DIRNAMELEN; i++) {
-        if (i < end - start) {
-            target[i] = path[start + i];
-        } else {
-            target[i] = '\0';
-        }
-        //  if (i < end - start) target[i] = path[start + i];
-        //  else target[i] = '\0';
-     }
- }
 
 /*
  * Compare dirname. Return 0 if equal, -1 otherwise.

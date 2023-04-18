@@ -4,22 +4,249 @@
 #include <comp421/yalnix.h>
 #include <comp421/iolib.h>
 #include <comp421/filesystem.h>
-#include "path.h"
+// #include "path.h"
 #include "packet.h"
-#include "fd.h"
+// #include "fd.h"
+
+/*****************
+ * PATH HANDLING *
+ *****************/
+
+typedef struct PathIterator {
+    struct PathIterator *head;
+    struct PathIterator *next;
+    char data[DIRNAMELEN];
+} PathIterator;
+
+/*
+ * Fills target buffer path + empty strings.
+ */
+void SetDirectoryName(char *target, char *path, int start, int end);
+
+/*
+ * Given pathname as Yalnix argument, parse it
+ * into a linked list of component.
+ */
+PathIterator *ParsePath(char *pathname);
+
+/*
+ * Free pathIterator linked list after finished using it.
+ * You must provided the head of the linked list.
+ */
+int DeletePathIterator(PathIterator *it);
+
+
+/*
+ * Private helper method which allocate PathIterator.
+ */
+PathIterator *CreatePathIterator(PathIterator *head) {
+    PathIterator *it = malloc(sizeof(PathIterator));
+    it->head = head;
+    it->next = NULL;
+    return it;
+}
+
+
+/*
+ * Fills target buffer path + empty strings.
+ */
+ void SetDirectoryName(char *target, char *path, int start, int end) {
+     int i;
+     for (i = 0; i < DIRNAMELEN; i++) {
+        if (i < end - start) {
+            target[i] = path[start + i];
+        } else {
+            target[i] = '\0';
+        }
+        //  if (i < end - start) target[i] = path[start + i];
+        //  else target[i] = '\0';
+     }
+ }
+
+/*
+ * Given pathname as Yalnix argument, parse it
+ * into a linked list of component.
+ */
+PathIterator *ParsePath(char *pathname) {
+    PathIterator *it = CreatePathIterator(NULL);
+    PathIterator *head = it;
+
+    int i = 0;
+    int start = 0;
+    int found = 0;
+    char next;
+
+    // Backslash is found in the root position
+    if (pathname[0] == '/') {
+        SetDirectoryName(it->data, pathname, 0, 1);
+        it->next = CreatePathIterator(head);
+        it = it->next;
+        i++;
+        start = 1;
+        found = 1;
+    }
+
+    while ((next = pathname[i]) != '\0') {
+        if (found == 0 && next == '/') {
+            // Backslash is just found
+            SetDirectoryName(it->data, pathname, start, i);
+            it->next = CreatePathIterator(head);
+            it = it->next;
+            found = 1;
+        } else if (found == 1 && next != '/') {
+            // Backslash is just finished.
+            found = 0;
+            start = i;
+        }
+        i++;
+    }
+
+    if (found) {
+        // If iterator is finished after backslash is found,
+        // last component is current directory
+        SetDirectoryName(it->data, ".", 0, 1);
+        it->next = CreatePathIterator(head);
+    } else {
+        // Last remaining path
+        SetDirectoryName(it->data, pathname, start, i);
+        it->next = CreatePathIterator(head);
+    }
+
+    return head;
+}
+
+/*
+ * Free pathIterator linked list after finished using it.
+ * You must provided the head of the linked list.
+ */
+int DeletePathIterator(PathIterator *head) {
+    PathIterator *prev;
+    PathIterator *it = head;
+
+    while (it != NULL) {
+        prev = it;
+        it = it->next;
+        free(prev);
+    }
+    return 0;
+}
+
+
+/*******************
+ * File Descriptor *
+ *******************/
+
+typedef struct FileDescriptor {
+    int id; /* FD id */
+    int used; /* Only valid if used = 1 */
+    int inum; /* Inode number */
+    int reuse; /* Same inode with different reuse means file is changed */
+    int pos; /* Current position */
+} FileDescriptor;
+
+/*
+ * Prepare new file descriptor using lowest available fd using file data.
+ * Return NULL if open file table is all filled up.
+ */
+FileDescriptor *CreateFileDescriptor();
+
+/*
+ * Close file descriptor. Return -1 if fd is invalid.
+ */
+int CloseFileDescriptor(int fd);
+
+/*
+ * Get file descriptor. Return NULL if fd is invalid.
+ */
+FileDescriptor *GetFileDescriptor(int fd);
+
+FileDescriptor open_file_table[MAX_OPEN_FILES];
+int initialized = 0;
+
+/*
+ * Private helper for initializing open file table
+ */
+void IntializeOpenFileTable() {
+    int i;
+    if (initialized == 1) {
+        return;
+    }
+    for (i = 0; i < MAX_OPEN_FILES; i++) {
+        open_file_table[i].id = i;
+        open_file_table[i].used = 0;
+        open_file_table[i].inum = 0;
+        open_file_table[i].pos = 0;
+    }
+    initialized = 1;
+}
+
+/*
+ * Prepare new file descriptor using lowest available fd using file data.
+ * Return -1 if open file table is all filled up.
+ */
+FileDescriptor *CreateFileDescriptor() {
+    int i;
+    if (initialized == 0) {
+        IntializeOpenFileTable();
+    }
+    for (i = 0; i < MAX_OPEN_FILES; i++) {
+        if (open_file_table[i].used == 0) {
+            open_file_table[i].used = 1;
+            break;
+        }
+    }
+    if (i >= MAX_OPEN_FILES) {
+        return NULL;
+    }
+    return &open_file_table[i];
+}
+
+/*
+ * Close file descriptor. Return -1 if fd is invalid.
+ */
+int CloseFileDescriptor(int fd_id) {
+    if (fd_id < 0 || fd_id >= MAX_OPEN_FILES) {
+        return -1;
+    }
+    if (initialized == 0) {
+        return -1;
+    }
+    if (open_file_table[fd_id].used != 0) {
+        open_file_table[fd_id].used = 0;
+        return 0;
+    }
+    return -1;
+}
+
+/*
+ * Get file descriptor. Return NULL if fd is invalid.
+ */
+FileDescriptor *GetFileDescriptor(int fd_id) {
+    if (fd_id < 0 || fd_id >= MAX_OPEN_FILES) {
+        return NULL;
+    }
+    if (initialized == 0) {
+        return NULL;
+    }
+    if (open_file_table[fd_id].used == 0) {
+        return NULL;
+    }
+    return &open_file_table[fd_id];
+}
+
 
 int current_inum = ROOTINODE;
 
 /* Return -1 if pathname is invalid */
-int AssertPathname(char *pathname) {
-    /* Verify against null pointer */
-    if (pathname == NULL) return -1;
+// int AssertPathname(char *pathname) {
+//     /* Verify against null pointer */
+//     if (pathname == NULL) return -1;
 
-    /* Verify against pathname max length */
-    if (strlen(pathname) > MAXPATHNAMELEN) return -1;
+//     /* Verify against pathname max length */
+//     if (strlen(pathname) > MAXPATHNAMELEN) return -1;
 
-    return 0;
-}
+//     return 0;
+// }
 
 /*
  * Helper for Iterating over pathname via file server
@@ -37,8 +264,6 @@ int IterateFilePath(char *pathname, int *parent_inum, struct Stat *stat, char *f
     void *packet = malloc(PACKET_SIZE);
     ((DataPacket *)packet)->packet_type = MSG_SEARCH_FILE;
 
-    /* Tokenize pathname */
-    PathIterator *it = ParsePath(pathname);
 
     /* Inode from iteration */
     int next_inum = current_inum;
@@ -47,20 +272,32 @@ int IterateFilePath(char *pathname, int *parent_inum, struct Stat *stat, char *f
     /* By default, parent_inum is current_inum */
     *parent_inum = current_inum;
 
+    /* Tokenize pathname */
+    PathIterator *it = ParsePath(pathname);
     /* Iterate over tokenized pathname components */
     while (it->next != NULL) {
         data = it->data;
         /* We already know the inode for root */
-        if (data[0] == '/') {
-            next_inum = ROOTINODE;
-            *parent_inum = ROOTINODE;
-        } else {
+        if (data[0] != '/') {
             ((DataPacket *)packet)->arg1 = next_inum;
             ((DataPacket *)packet)->pointer = (void *)data;
             Send(packet, -FILE_SERVER);
             *parent_inum = next_inum;
             next_inum = ((FilePacket *)packet)->inum;
+        } else {
+            next_inum = ROOTINODE;
+            *parent_inum = ROOTINODE;
         }
+        // if (data[0] == '/') {
+        //     next_inum = ROOTINODE;
+        //     *parent_inum = ROOTINODE;
+        // } else {
+        //     ((DataPacket *)packet)->arg1 = next_inum;
+        //     ((DataPacket *)packet)->pointer = (void *)data;
+        //     Send(packet, -FILE_SERVER);
+        //     *parent_inum = next_inum;
+        //     next_inum = ((FilePacket *)packet)->inum;
+        // }
 
         /*
          * Incrementing to next iterator early
@@ -69,7 +306,9 @@ int IterateFilePath(char *pathname, int *parent_inum, struct Stat *stat, char *f
         it = it->next;
 
         /* Inum = 0 means file was not found */
-        if (next_inum == 0) break;
+        if (next_inum == 0) {
+            break;
+        }
     }
 
     /*
@@ -77,29 +316,53 @@ int IterateFilePath(char *pathname, int *parent_inum, struct Stat *stat, char *f
      * This means all paths are found at least until last component.
      */
     int last_not_found = 0;
-    if (it->next == NULL) {
-        if (filename) memcpy(filename, data, DIRNAMELEN);
-        if (next_inum == 0) last_not_found = 1;
+    if (it->next == NULL && filename) {
+        memcpy(filename, data, DIRNAMELEN);
+    }
+    if (it->next == NULL && next_inum == 0) {
+        last_not_found = 1;
+    }
+    // if (it->next == NULL) {
+    //     if (filename) {
+    //         memcpy(filename, data, DIRNAMELEN);
+    //     }
+    //     if (next_inum == 0) {
+    //         last_not_found = 1;
+    //     }
+    // }
+
+    if (next_inum != 0 && stat) {
+        stat->inum = ((FilePacket *)packet)->inum;
+        stat->type = ((FilePacket *)packet)->type;
+        stat->size = ((FilePacket *)packet)->size;
+        stat->nlink = ((FilePacket *)packet)->nlink;
+    }
+    if (next_inum != 0 && reuse) {
+        *reuse = ((FilePacket *)packet)->reuse;
     }
 
-    if (next_inum != 0) {
-        if (stat) {
-            stat->inum = ((FilePacket *)packet)->inum;
-            stat->type = ((FilePacket *)packet)->type;
-            stat->size = ((FilePacket *)packet)->size;
-            stat->nlink = ((FilePacket *)packet)->nlink;
-        }
+    // if (next_inum != 0) {
+    //     if (stat) {
+    //         stat->inum = ((FilePacket *)packet)->inum;
+    //         stat->type = ((FilePacket *)packet)->type;
+    //         stat->size = ((FilePacket *)packet)->size;
+    //         stat->nlink = ((FilePacket *)packet)->nlink;
+    //     }
 
-        if (reuse) {
-            *reuse = ((FilePacket *)packet)->reuse;
-        }
-    }
+    //     if (reuse) {
+    //         *reuse = ((FilePacket *)packet)->reuse;
+    //     }
+    // }
 
     DeletePathIterator(it);
     free(packet);
 
-    if (next_inum != 0) return 0;
-    if (last_not_found != 0) return -1;
+    if (next_inum != 0) {
+        return 0;
+    }
+    if (last_not_found != 0) {
+        return -1;
+    }
     return -2;
 }
 
@@ -109,11 +372,14 @@ int IterateFilePath(char *pathname, int *parent_inum, struct Stat *stat, char *f
 int Create(char *pathname) {
     TracePrintf(10, "\t┌─ [Create] path: %s\n", pathname);
 
-    /* Verify pathname */
-    if (AssertPathname(pathname) < 0) {
+    if (pathname == NULL || strlen(pathname) > MAXPATHNAMELEN) {
         fprintf(stderr, "[Error] Invalid pathname\n");
         return -1;
     }
+    // if (AssertPathname(pathname) < 0) {
+    //     fprintf(stderr, "[Error] Invalid pathname\n");
+    //     return -1;
+    // }
 
     /* Create file descriptor first */
     FileDescriptor *fd = CreateFileDescriptor();
@@ -123,9 +389,9 @@ int Create(char *pathname) {
     }
 
     /* Iterate over all components */
-    char filename[DIRNAMELEN];
     int *parent_inum = malloc(sizeof(int));
     struct Stat *stat = malloc(sizeof(struct Stat));
+    char filename[DIRNAMELEN];
     int result = IterateFilePath(pathname, parent_inum, stat, filename, NULL);
 
     /* Path was not found */
@@ -156,11 +422,30 @@ int Create(char *pathname) {
     /* If returned inum is 0, there is an error with file creation */
     int new_inum = ((FilePacket *)packet)->inum;
     if (new_inum <= 0) {
-        if (new_inum == 0) fprintf(stderr, "[Error] File creation error\n");
-        else if (new_inum == -1) fprintf(stderr, "[Error] Cannot create file in non-directory.\n");
-        else if (new_inum == -2) fprintf(stderr, "[Error] Directory has reached max size limit.\n");
-        else if (new_inum == -3) fprintf(stderr, "[Error] Not enough inode left.\n");
-        else if (new_inum == -4) fprintf(stderr, "[Error] Not enough block left.\n");
+        switch (new_inum) {
+            case 0:
+                fprintf(stderr, "[Error] File creation error\n");
+                break;
+            case -1:
+                fprintf(stderr, "[Error] Cannot create file in non-directory.\n");
+                break;
+            case -2:
+                fprintf(stderr, "[Error] Directory has reached max size limit.\n");
+                break;
+            case -3:
+                fprintf(stderr, "[Error] Not enough inode left.\n");
+                break;
+            case -4:
+                fprintf(stderr, "[Error] Not enough block left.\n");
+                break;
+            default:
+                break;
+        }
+        // if (new_inum == 0) fprintf(stderr, "[Error] File creation error\n");
+        // else if (new_inum == -1) fprintf(stderr, "[Error] Cannot create file in non-directory.\n");
+        // else if (new_inum == -2) fprintf(stderr, "[Error] Directory has reached max size limit.\n");
+        // else if (new_inum == -3) fprintf(stderr, "[Error] Not enough inode left.\n");
+        // else if (new_inum == -4) fprintf(stderr, "[Error] Not enough block left.\n");
 
         free(packet);
         free(parent_inum);
@@ -187,10 +472,15 @@ int Open(char *pathname) {
     TracePrintf(10, "\t┌─ [Open] path: %s\n", pathname);
 
     /* Verify pathname */
-    if (AssertPathname(pathname) < 0) {
+
+    if (pathname == NULL || strlen(pathname) > MAXPATHNAMELEN) {
         fprintf(stderr, "[Error] Invalid pathname\n");
         return -1;
     }
+    // if (AssertPathname(pathname) < 0) {
+    //     fprintf(stderr, "[Error] Invalid pathname\n");
+    //     return -1;
+    // }
 
     /* Create file descriptor first */
     FileDescriptor *fd = CreateFileDescriptor();
@@ -213,8 +503,8 @@ int Open(char *pathname) {
         return -1;
     }
 
-    fd->inum = stat->inum;
     fd->pos = 0;
+    fd->inum = stat->inum;
 
     free(parent_inum);
     free(stat);
@@ -270,11 +560,25 @@ int Read(int fd_id, void *buf, int size) {
     result = packet->arg1;
     free(packet);
 
-    if (result < 0) {
-        if (result == -1) fprintf(stderr, "[Error] Reuse count has changed. Please close this fd.\n");
-        else if (result == -2) fprintf(stderr, "[Error] This file is freed.\n");
+    if (result == -1) {
+        fprintf(stderr, "[Error] Reuse count has changed. Please close this fd.\n");
+        return -1;
+    } else if (result == -2) {
+        fprintf(stderr, "[Error] This file is freed.\n");
+        return -1;
+    } else if (result < 0) {
         return -1;
     }
+
+    // if (result < 0) {
+    //     if (result == -1) {
+    //         fprintf(stderr, "[Error] Reuse count has changed. Please close this fd.\n");
+    //     }
+    //     if (result == -2) {
+    //         fprintf(stderr, "[Error] This file is freed.\n");
+    //     }
+    //     return -1;
+    // }
 
     fd->pos += result;
     TracePrintf(10, "\t└─ [Read size: %d]\n\n", result);
@@ -299,7 +603,6 @@ int Write(int fd_id, void *buf, int size) {
         return -1;
     }
 
-    int result;
     DataPacket *packet = malloc(PACKET_SIZE);
     memset(packet, 0, PACKET_SIZE);
     packet->packet_type = MSG_WRITE_FILE;
@@ -309,16 +612,38 @@ int Write(int fd_id, void *buf, int size) {
     packet->arg4 = fd->reuse;
     packet->pointer = (void *)buf;
     Send(packet, -FILE_SERVER);
-    result = packet->arg1;
+    int result = packet->arg1;
     free(packet);
 
-    if (result < 0) {
-        if (result == -1) fprintf(stderr, "[Error] Trying to write beyond max file size.\n");
-        else if (result == -2) fprintf(stderr, "[Error] Trying to write to non-regular file.\n");
-        else if (result == -3) fprintf(stderr, "[Error] Reuse count has changed. Please close this fd.\n");
-        else if (result == -4) fprintf(stderr, "[Error] Not enough block left.\n");
+    if (result == -1) {
+        fprintf(stderr, "[Error] Trying to write beyond max file size.\n");
+        return -1;
+    } else if (result == -2) {
+        fprintf(stderr, "[Error] Trying to write to non-regular file.\n");
+        return -1;
+    } else if (result == -3) {
+        fprintf(stderr, "[Error] Reuse count has changed. Please close this fd.\n");
+        return -1;
+    } else if (result == -4) {
+        fprintf(stderr, "[Error] Not enough block left.\n");
+        return -1;
+    } else if (result < 0) {
         return -1;
     }
+
+    // if (result < 0) {
+    //     if (result == -1) {
+    //         fprintf(stderr, "[Error] Trying to write beyond max file size.\n");
+    //     }
+    //     if (result == -2) {
+    //         fprintf(stderr, "[Error] Trying to write to non-regular file.\n");
+    //     }
+    //     if (result == -3) {
+    //         fprintf(stderr, "[Error] Reuse count has changed. Please close this fd.\n");
+    //     }
+    //     else if (result == -4) fprintf(stderr, "[Error] Not enough block left.\n");
+    //     return -1;
+    // }
     fd->pos += result;
 
     TracePrintf(10, "\t└─ [Write size: %d]\n\n", result);
@@ -355,20 +680,30 @@ int Seek(int fd_id, int offset, int whence) {
     }
 
     int new_pos;
-    switch (whence) {
-        case SEEK_SET:
-            new_pos = offset;
-            break;
-        case SEEK_CUR:
-            new_pos = fd->pos + offset;
-            break;
-        case SEEK_END:
-            new_pos = size + offset;
-            break;
-        default:
-            fprintf(stderr, "[Error] Invalid whence provided.\n");
-            return -1;
+    if (whence == SEEK_SET) {
+        new_pos = offset;
+    } else if (whence == SEEK_CUR) {
+        new_pos = fd->pos + offset;
+    } else if (whence == SEEK_END) {
+        new_pos = size + offset;
+    } else {
+        fprintf(stderr, "[Error] Invalid whence provided.\n");
+        return -1;
     }
+    // switch (whence) {
+    //     case SEEK_SET:
+    //         new_pos = offset;
+    //         break;
+    //     case SEEK_CUR:
+    //         new_pos = fd->pos + offset;
+    //         break;
+    //     case SEEK_END:
+    //         new_pos = size + offset;
+    //         break;
+    //     default:
+    //         fprintf(stderr, "[Error] Invalid whence provided.\n");
+    //         return -1;
+    // }
 
     if (new_pos < 0) {
         fprintf(stderr, "[Error] Updated position cannot be negative.\n");
@@ -388,23 +723,33 @@ int Link(char *oldname, char *newname) {
     TracePrintf(10, "\t┌─ [Link]\n");
 
     /* Verify pathname */
-    if (AssertPathname(oldname) < 0) {
-        fprintf(stderr, "[Error] Invalid old pathname\n");
+
+    if (oldname == NULL || strlen(oldname) > MAXPATHNAMELEN) {
+        fprintf(stderr, "[Error] Invalid pathname\n");
+        return -1;
+    }
+    // if (AssertPathname(oldname) < 0) {
+    //     fprintf(stderr, "[Error] Invalid old pathname\n");
+    //     return -1;
+    // }
+
+
+    if (newname == NULL || strlen(newname) > MAXPATHNAMELEN) {
+        fprintf(stderr, "[Error] Invalid pathname\n");
         return -1;
     }
 
-    if (AssertPathname(newname) < 0) {
-        fprintf(stderr, "[Error] Invalid new pathname\n");
-        return -1;
-    }
+    // if (AssertPathname(newname) < 0) {
+    //     fprintf(stderr, "[Error] Invalid new pathname\n");
+    //     return -1;
+    // }
 
     /* Iterate over both components */
-    char new_filename[DIRNAMELEN];
     int *old_parent_inum = malloc(sizeof(int));
     int *new_parent_inum = malloc(sizeof(int));
     struct Stat *old_stat = malloc(sizeof(struct Stat));
+    char new_filename[DIRNAMELEN];
     int result1 = IterateFilePath(oldname, old_parent_inum, old_stat, NULL, NULL);
-    int result2 = IterateFilePath(newname, new_parent_inum, NULL, new_filename, NULL);
 
     /* Oldname was not found */
     if (result1 < 0) {
@@ -424,6 +769,7 @@ int Link(char *oldname, char *newname) {
         return -1;
     }
 
+    int result2 = IterateFilePath(newname, new_parent_inum, NULL, new_filename, NULL);
     /* Newname path was not found */
     if (result2 == -2) {
         fprintf(stderr, "[Error] Path %s not found.\n", newname);
@@ -474,7 +820,11 @@ int Unlink(char *pathname) {
     TracePrintf(10, "\t┌─ [Unlink] pathname: %s\n", pathname);
 
     /* Verify pathname */
-    if (AssertPathname(pathname) < 0) return -1;
+    // if (AssertPathname(pathname) < 0) return -1;
+
+    if (pathname == NULL || strlen(pathname) > MAXPATHNAMELEN) {
+        return -1;
+    }
 
     int *parent_inum = malloc(sizeof(int));
     struct Stat *stat = malloc(sizeof(struct Stat));
@@ -530,7 +880,11 @@ int MkDir(char *pathname) {
     TracePrintf(10, "\t┌─ [MkDir] path: %s\n", pathname);
 
     /* Verify pathname */
-    if (AssertPathname(pathname) < 0) return -1;
+    // if (AssertPathname(pathname) < 0) return -1;
+
+    if (pathname == NULL || strlen(pathname) > MAXPATHNAMELEN) {
+        return -1;
+    }
 
     /* Iterate over all components */
     char filename[DIRNAMELEN];
@@ -584,7 +938,11 @@ int RmDir(char *pathname) {
     TracePrintf(10, "\t┌─ [RmDir] path: %s\n", pathname);
 
     /* Verify pathname */
-    if (AssertPathname(pathname) < 0) return -1;
+    // if (AssertPathname(pathname) < 0) return -1;
+
+    if (pathname == NULL || strlen(pathname) > MAXPATHNAMELEN) {
+        return -1;
+    }
 
     /* Iterate over all components */
     char filename[DIRNAMELEN];
@@ -626,13 +984,29 @@ int RmDir(char *pathname) {
     free(parent_inum);
     free(stat);
 
-    if (result < 0) {
-        if (result == -1) fprintf(stderr, "[Error] Cannot delete root directory.\n");
-        else if (result == -2) fprintf(stderr, "[Error] Parent is not a directory.\n");
-        else if (result == -3) fprintf(stderr, "[Error] Cannot call RmDir on regular file.\n");
-        else if (result == -4) fprintf(stderr, "[Error] There are other directories left in this directory.\n");
+    if (result == -1) {
+        fprintf(stderr, "[Error] Cannot delete root directory.\n");
+        return -1;
+    } else if (result == -2) {
+        fprintf(stderr, "[Error] Parent is not a directory.\n");
+        return -1;
+    } else if (result == -3) {
+        fprintf(stderr, "[Error] Cannot call RmDir on regular file.\n");
+        return -1;
+    } else if (result == -4) {
+        fprintf(stderr, "[Error] There are other directories left in this directory.\n");
+        return -1;
+    } else if (result < 0) {
         return -1;
     }
+
+    // if (result < 0) {
+    //     if (result == -1) fprintf(stderr, "[Error] Cannot delete root directory.\n");
+    //     else if (result == -2) fprintf(stderr, "[Error] Parent is not a directory.\n");
+    //     else if (result == -3) fprintf(stderr, "[Error] Cannot call RmDir on regular file.\n");
+    //     else if (result == -4) fprintf(stderr, "[Error] There are other directories left in this directory.\n");
+    //     return -1;
+    // }
 
     TracePrintf(10, "\t└─ [RmDir]\n\n");
     return 0;
@@ -642,7 +1016,11 @@ int ChDir(char *pathname) {
     TracePrintf(10, "\t┌─ [ChDir] path: %s\n", pathname);
 
     /* Verify pathname */
-    if (AssertPathname(pathname) < 0) return -1;
+    // if (AssertPathname(pathname) < 0) return -1;
+
+    if (pathname == NULL || strlen(pathname) > MAXPATHNAMELEN) {
+        return -1;
+    }
 
     /* Iterate over all components */
     int *parent_inum = malloc(sizeof(int));
@@ -678,7 +1056,11 @@ int Stat(char *pathname, struct Stat *statbuf) {
     TracePrintf(10, "\t┌─ [Stat] path: %s\n", pathname);
 
     /* Verify pathname */
-    if (AssertPathname(pathname) < 0) return -1;
+    // if (AssertPathname(pathname) < 0) return -1;
+
+    if (pathname == NULL || strlen(pathname) > MAXPATHNAMELEN) {
+        return -1;
+    }
 
     /* Iterate over all components */
     int *parent_inum = malloc(sizeof(int));
@@ -713,7 +1095,6 @@ int Sync() {
  */
 int Shutdown() {
     /* Create new file or truncate existing file */
-    int success;
     void *packet = malloc(PACKET_SIZE);
     ((DataPacket *)packet)->packet_type = MSG_SYNC;
     ((DataPacket *)packet)->arg1 = 1; /* Shut down */
