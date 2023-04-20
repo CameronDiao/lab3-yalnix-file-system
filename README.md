@@ -9,3 +9,5 @@ All implementation of the yalnix file system can be found in iolib.c, yfs.c, fil
 (File System Server): we make requests to the server through the Send call. After, the calling process blocks until a Receive call. 
 
 (File System Call): Description in lab handout.
+
+For testing, we used all tests located in comp421_lab3
