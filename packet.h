@@ -36,9 +36,8 @@
 // Receive DataPacket
 #define MSG_SYNC 9
 
-/*
- * All of the below must have size of 32 bytes.
- */
+
+/// All of the below must have size of 32 bytes. ///
 
 /*
  * Unknown packet
@@ -50,28 +49,28 @@ typedef struct UnknownPacket {
 } UnknownPacket;
 
 /*
- * Packet for multiple purpose
- */
-typedef struct DataPacket {
-  short packet_type; /* packet type (2 bytes) */
-  char unused[6];
-  int arg1; /* integer argument (4 bytes) */
-  int arg2; /* integer argument (4 bytes) */
-  int arg3; /* integer argument (4 bytes) */
-  int arg4; /* integer arugment (4 bytes) */
-  void *pointer; /* pointer argument (8 bytes) */
-} DataPacket;
-
-/*
  * Packet for returning file data
  */
 typedef struct FilePacket {
-  short packet_type; /* packet type (2 bytes) */
-  char unused[10]; /* 10 unused bytes for padding */
+  short packet_type; // packet type (2 bytes) 
+  char unused[10]; // 10 unused bytes for padding 
 
-  int inum; /* inode number (4 bytes) */
-  int type; /* type of file (4 bytes) */
-  int size; /* size of file in bytes (4 bytes) */
-  int nlink; /* link count of file's inode (4 bytes) */
-  int reuse; /* reuse count of file's inode (4 bytes )*/
+  int inum; // inode number (4 bytes) 
+  int type; // type of file (4 bytes) 
+  int size; // size of file in bytes (4 bytes) 
+  int nlink; // link count of file's inode (4 bytes) 
+  int reuse; // reuse count of file's inode (4 bytes )
 } FilePacket;
+
+/*
+ * Packet for multiple purpose
+ */
+typedef struct DataPacket {
+  short packet_type; // packet type (2 bytes) 
+  char unused[6];
+  int arg1; // integer argument (4 bytes) 
+  int arg2; // integer argument (4 bytes) 
+  int arg3; // integer argument (4 bytes) 
+  int arg4; // integer arugment (4 bytes) 
+  void *pointer; // pointer argument (8 bytes) 
+} DataPacket;

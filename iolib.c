@@ -235,11 +235,6 @@ int current_inum = ROOTINODE;
 
 /*
  * Helper for Iterating over pathname via file server
- * - pathname: pathname to iterate
- * - parent_inum: inum of second last component only if return value is 0 or -1
- * - stat (output): file stat of last component only if return value is 0 (optional)
- * - filename (output): dirname of last component only if return value is 0 or -1 (optional)
- * - reuse (output): reuse count of last component only if return value is 0 (optional)
  * Return 0 if all components are found
  * Return -1 if all but last component is found
  * Else return -2
