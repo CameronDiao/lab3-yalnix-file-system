@@ -42,7 +42,7 @@ struct inode_cache* cache_for_inodes;
 /**
  * Buffer constructor.
  */
-struct integer_buf *GetBuffer(int size);
+struct integer_buf *StartBuffer(int size);
 
 /**
  * Push value to buffer.
@@ -62,7 +62,7 @@ void SetDirectoryName(char *target, char *path, int start, int end);
 /**
  * Buffer contructor.
  */
-struct integer_buf *GetBuffer(int size) {
+struct integer_buf *StartBuffer(int size) {
     struct integer_buf* newBuf = malloc(sizeof(struct integer_buf));
     newBuf->size = size;
     newBuf->b = malloc(sizeof(int) * size);
@@ -175,27 +175,27 @@ int block_count;
 struct block_cache* cache_for_blocks; 
 struct inode_cache* cache_for_inodes; 
 
-struct inode_cache *CreateInodeCache();
+struct inode_cache *MakeInodeCache();
 
-struct block_cache *CreateBlockCache(int num_blocks);
+struct block_cache *MakeBlockCache(int num_blocks);
 
-void AddToInodeCache(struct inode_cache *stack, struct inode *in, int inumber);
+void AddToInodeCache(struct inode_cache *cache, struct inode *in, int inumber);
 
-void AddToBlockCache(struct block_cache *stack, void* block, int block_number);
+void AddToBlockCache(struct block_cache *cache, void* block, int block_number);
 
-struct inode_cache_entry* LookUpInode(struct inode_cache *stack, int inumber);
+struct inode_cache_entry* FindInodeInCache(struct inode_cache *cache, int inumber);
 
-struct block_cache_entry* LookUpBlock(struct block_cache *stack, int block_number);
+struct block_cache_entry* FindBlockInCache(struct block_cache *cache, int block_number);
 
-void RaiseInodeCachePosition(struct inode_cache* stack, struct inode_cache_entry* recent_access);
+void PopToFrontInode(struct inode_cache* cache, struct inode_cache_entry* recent_access);
 
-void RaiseBlockCachePosition(struct block_cache *stack, struct block_cache_entry* recent_access);
+void PopToFrontBlock(struct block_cache *cache, struct block_cache_entry* recent_access);
 
-void WriteBackInode(struct inode_cache_entry* out);
+void WriteIntoInode(struct inode_cache_entry* out);
 
-struct inode_cache_entry* GetInode(int inode_num);
+struct inode_cache_entry* SearchForInode(int inode_num);
 
-struct block_cache_entry* GetBlock(int block_num);
+struct block_cache_entry* SearchForBlock(int block_num);
 
 int HashIndex(int key_value);
 
@@ -206,7 +206,7 @@ int HashIndex(int key_value);
 /**
  * New Inode Cache
  */
-struct inode_cache *CreateInodeCache(int num_inodes) {
+struct inode_cache *MakeInodeCache(int num_inodes) {
     inode_count = num_inodes;
 
     struct inode_cache *new_cache = malloc(sizeof(struct inode_cache));
@@ -226,40 +226,40 @@ struct inode_cache *CreateInodeCache(int num_inodes) {
 /**
  * Add new inode to cache.
  */
-void AddToInodeCache(struct inode_cache *stack, struct inode *inode, int inum) {
-    if (stack->stack_size == INODE_CACHESIZE) {
-        struct inode_cache_entry *entry = stack->base;
+void AddToInodeCache(struct inode_cache *cache, struct inode *inode, int inum) {
+    if (cache->stack_size == INODE_CACHESIZE) {
+        struct inode_cache_entry *entry = cache->base;
         int old_index = HashIndex(entry->inum);
         int new_index = HashIndex(inum);
 
-        stack->base = stack->base->prev_lru;
-        stack->base->next_lru = NULL;
+        cache->base = cache->base->prev_lru;
+        cache->base->next_lru = NULL;
 
-        if (entry->dirty && entry->inum > 0) WriteBackInode(entry);
+        if (entry->dirty && entry->inum > 0) WriteIntoInode(entry);
         if (entry->prev_hash != NULL && entry->next_hash != NULL) {
             entry->next_hash->prev_hash = entry->prev_hash;
             entry->prev_hash->next_hash = entry->next_hash;
         } else if (entry->prev_hash == NULL && entry->next_hash != NULL) {
-            stack->hash_set[old_index] = entry->next_hash;
+            cache->hash_set[old_index] = entry->next_hash;
             entry->next_hash->prev_hash = NULL;
         } else if (entry->prev_hash != NULL && entry->next_hash == NULL) {
             entry->prev_hash->next_hash = NULL;
         } else {
-            stack->hash_set[old_index] = NULL;
+            cache->hash_set[old_index] = NULL;
         }
         entry->inode = inode;
         entry->dirty = 0;
         entry->inum = inum;
         entry->prev_lru = NULL;
-        entry->next_lru = stack->top;
-        stack->top->prev_lru = entry;
-        stack->top = entry;
+        entry->next_lru = cache->top;
+        cache->top->prev_lru = entry;
+        cache->top = entry;
         entry->prev_hash = NULL;
-        if (stack->hash_set[new_index] != NULL) {
-            stack->hash_set[new_index]->prev_hash = entry;
+        if (cache->hash_set[new_index] != NULL) {
+            cache->hash_set[new_index]->prev_hash = entry;
         }
-        entry->next_hash = stack->hash_set[new_index];
-        stack->hash_set[new_index] = entry;
+        entry->next_hash = cache->hash_set[new_index];
+        cache->hash_set[new_index] = entry;
     } else {
         struct inode_cache_entry* item = malloc(sizeof(struct inode_cache_entry));
         int index = HashIndex(inum);
@@ -268,33 +268,33 @@ void AddToInodeCache(struct inode_cache *stack, struct inode *inode, int inum) {
         item->prev_hash = NULL;
         item->prev_lru = NULL;
 
-        if (stack->hash_set[index] != NULL) {
-            stack->hash_set[index]->prev_hash = item;
+        if (cache->hash_set[index] != NULL) {
+            cache->hash_set[index]->prev_hash = item;
         }
-        item->next_hash = stack->hash_set[index];
-        stack->hash_set[index] = item;
+        item->next_hash = cache->hash_set[index];
+        cache->hash_set[index] = item;
 
-        if (stack->stack_size == 0) {
-            stack->base = item;
-            stack->top = item;
+        if (cache->stack_size == 0) {
+            cache->base = item;
+            cache->top = item;
         } else {
-            item->next_lru = stack->top;
-            stack->top->prev_lru = item;
-            stack->top = item;
+            item->next_lru = cache->top;
+            cache->top->prev_lru = item;
+            cache->top = item;
         }
 
-        stack->stack_size++;
+        cache->stack_size++;
     }
 }
 
 /**
  * Look up inode in cache.
  */
-struct inode_cache_entry* LookUpInode(struct inode_cache *stack, int inum) {
+struct inode_cache_entry* FindInodeInCache(struct inode_cache *cache, int inum) {
     struct inode_cache_entry* ice;
-    for (ice = stack->hash_set[HashIndex(inum)]; ice != NULL; ice = ice->next_hash) {
+    for (ice = cache->hash_set[HashIndex(inum)]; ice != NULL; ice = ice->next_hash) {
         if (ice->inum == inum) {
-            RaiseInodeCachePosition(stack, ice);
+            PopToFrontInode(cache, ice);
             return ice;
         }
     }
@@ -304,8 +304,8 @@ struct inode_cache_entry* LookUpInode(struct inode_cache *stack, int inum) {
 /**
  * Write into inode.
  */
-void WriteBackInode(struct inode_cache_entry* out) {
-    struct block_cache_entry* inode_block_entry = GetBlock((out->inum / 8) + 1);
+void WriteIntoInode(struct inode_cache_entry* out) {
+    struct block_cache_entry* inode_block_entry = SearchForBlock((out->inum / 8) + 1);
     void* inode_block = inode_block_entry->block;
     struct inode* overwrite = (struct inode *)inode_block + (out->inum % 8);
     inode_block_entry->dirty = 1;
@@ -314,42 +314,42 @@ void WriteBackInode(struct inode_cache_entry* out) {
 }
 
 /**
- * Pop inode and place at top of stack.
+ * Pop inode and place at top of cache.
  */
-void RaiseInodeCachePosition(struct inode_cache* stack, struct inode_cache_entry* recent_access) {
-    bool compare_inums = recent_access->inum == stack->top->inum;
+void PopToFrontInode(struct inode_cache* cache, struct inode_cache_entry* recent_access) {
+    bool compare_inums = recent_access->inum == cache->top->inum;
     bool compare_lrus = recent_access->prev_lru == NULL && recent_access->next_lru == NULL;
     if (compare_inums || compare_lrus) {
         return;
     }
 
-    if (recent_access->inum == stack->base->inum) {
+    if (recent_access->inum == cache->base->inum) {
         recent_access->prev_lru->next_lru = NULL;
-        stack->base = recent_access->prev_lru;
+        cache->base = recent_access->prev_lru;
 
-        recent_access->next_lru = stack->top;
-        stack->top->prev_lru = recent_access;
-        stack->top = recent_access;
+        recent_access->next_lru = cache->top;
+        cache->top->prev_lru = recent_access;
+        cache->top = recent_access;
     } else {
         recent_access->next_lru->prev_lru = recent_access->prev_lru;
         recent_access->prev_lru->next_lru = recent_access->next_lru;
 
-        recent_access->next_lru = stack->top;
-        stack->top->prev_lru = recent_access;
-        stack->top = recent_access;
+        recent_access->next_lru = cache->top;
+        cache->top->prev_lru = recent_access;
+        cache->top = recent_access;
     }
 }
 
 /**
  * Search for inode.
  */
-struct inode_cache_entry* GetInode(int inum) {
-    struct inode_cache_entry* current = LookUpInode(cache_for_inodes, inum);
+struct inode_cache_entry* SearchForInode(int inum) {
+    struct inode_cache_entry* current = FindInodeInCache(cache_for_inodes, inum);
     if (current != NULL) {
         return current;
     }
 
-    struct block_cache_entry* block_entry = GetBlock((inum / 8) + 1);
+    struct block_cache_entry* block_entry = SearchForBlock((inum / 8) + 1);
     void* inode_block = block_entry->block;
 
     AddToInodeCache(cache_for_inodes, (struct inode *)inode_block + (inum % 8), inum);
@@ -363,7 +363,7 @@ struct inode_cache_entry* GetInode(int inum) {
 /**
  * Create cache for blocks.
  */
-struct block_cache *CreateBlockCache(int num_blocks) {
+struct block_cache *MakeBlockCache(int num_blocks) {
     block_count = num_blocks;
     struct block_cache *new_cache = malloc(sizeof(struct block_cache));
     new_cache->stack_size = 0;
@@ -376,12 +376,12 @@ struct block_cache *CreateBlockCache(int num_blocks) {
 /**
  * Add inode to cache.
  */
-void AddToBlockCache(struct block_cache *stack, void* block, int block_number) {
-    if (stack->stack_size == BLOCK_CACHESIZE) {
-        struct block_cache_entry *entry = stack->base;
+void AddToBlockCache(struct block_cache *cache, void* block, int block_number) {
+    if (cache->stack_size == BLOCK_CACHESIZE) {
+        struct block_cache_entry *entry = cache->base;
 
-        stack->base = stack->base->prev_lru;
-        stack->base->next_lru = NULL;
+        cache->base = cache->base->prev_lru;
+        cache->base->next_lru = NULL;
 
         int old_index = HashIndex(entry->block_number);
         int new_index = HashIndex(block_number);
@@ -395,58 +395,58 @@ void AddToBlockCache(struct block_cache *stack, void* block, int block_number) {
         } else if(entry->next_hash == NULL && entry->prev_hash != NULL) {
             entry->prev_hash->next_hash = NULL;
         } else if(entry->next_hash != NULL && entry->prev_hash == NULL) {
-            stack->hash_set[old_index] = entry->next_hash;
+            cache->hash_set[old_index] = entry->next_hash;
             entry->next_hash->prev_hash = NULL;
         } else {
-            stack->hash_set[old_index] = NULL;
+            cache->hash_set[old_index] = NULL;
         }
 
         entry->block = block;
         entry->dirty = 0;
         entry->block_number = block_number;
         entry->prev_lru = NULL;
-        entry->next_lru = stack->top;
-        stack->top->prev_lru = entry;
-        stack->top = entry;
+        entry->next_lru = cache->top;
+        cache->top->prev_lru = entry;
+        cache->top = entry;
         entry->prev_hash = NULL;
 
-        if (stack->hash_set[new_index] != NULL) {
-            stack->hash_set[new_index]->prev_hash = entry;
+        if (cache->hash_set[new_index] != NULL) {
+            cache->hash_set[new_index]->prev_hash = entry;
         }
-        entry->next_hash = stack->hash_set[new_index];
-        stack->hash_set[new_index] = entry;
+        entry->next_hash = cache->hash_set[new_index];
+        cache->hash_set[new_index] = entry;
     } else {
         struct block_cache_entry* item = malloc(sizeof(struct inode_cache_entry));
         item->block_number = block_number;
         item->block = block;
-        if (stack->hash_set[HashIndex(block_number)] != NULL) {
-            stack->hash_set[HashIndex(block_number)]->prev_hash = item;
+        if (cache->hash_set[HashIndex(block_number)] != NULL) {
+            cache->hash_set[HashIndex(block_number)]->prev_hash = item;
         }
-        item->next_hash = stack->hash_set[HashIndex(block_number)];
+        item->next_hash = cache->hash_set[HashIndex(block_number)];
         item->prev_hash = NULL;
         item->prev_lru = NULL;
-        stack->hash_set[HashIndex(block_number)] = item;
-        if (stack->stack_size == 0) {
-            stack->top = item;
-            stack->base = item;
+        cache->hash_set[HashIndex(block_number)] = item;
+        if (cache->stack_size == 0) {
+            cache->top = item;
+            cache->base = item;
         } else {
-            item->next_lru = stack->top;
-            stack->top->prev_lru = item;
-            stack->top = item;
+            item->next_lru = cache->top;
+            cache->top->prev_lru = item;
+            cache->top = item;
         }
-        stack->stack_size = stack->stack_size + 1;
+        cache->stack_size = cache->stack_size + 1;
     }
 }
 
 /**
  * Search for block in cache.
  */
-struct block_cache_entry* LookUpBlock(struct block_cache *stack, int block_number) {
+struct block_cache_entry* FindBlockInCache(struct block_cache *cache, int block_number) {
     struct block_cache_entry* block;
-    block = stack->hash_set[HashIndex(block_number)];
+    block = cache->hash_set[HashIndex(block_number)];
     while (block != NULL) {
         if (block->block_number == block_number) {
-            RaiseBlockCachePosition(stack, block);
+            PopToFrontBlock(cache, block);
             return block;
         }
         block = block->next_hash;
@@ -457,26 +457,26 @@ struct block_cache_entry* LookUpBlock(struct block_cache *stack, int block_numbe
 /**
  * Pop block and place at top of cache.
  */
-void RaiseBlockCachePosition(struct block_cache *stack, struct block_cache_entry* recent_access) {
-    bool compare_bns = recent_access->block_number == stack->top->block_number;
+void PopToFrontBlock(struct block_cache *cache, struct block_cache_entry* recent_access) {
+    bool compare_bns = recent_access->block_number == cache->top->block_number;
     bool compare_lrus = recent_access->prev_lru == NULL && recent_access->next_lru == NULL;
     if (compare_bns || compare_lrus) {
         return;
     }
-    if (recent_access->block_number == stack->base->block_number) {
+    if (recent_access->block_number == cache->base->block_number) {
         recent_access->prev_lru->next_lru = NULL;
-        stack->base = recent_access->prev_lru;
+        cache->base = recent_access->prev_lru;
 
-        recent_access->next_lru = stack->top;
-        stack->top->prev_lru = recent_access;
-        stack->top = recent_access;
+        recent_access->next_lru = cache->top;
+        cache->top->prev_lru = recent_access;
+        cache->top = recent_access;
     } else {
         recent_access->next_lru->prev_lru = recent_access->prev_lru;
         recent_access->prev_lru->next_lru = recent_access->next_lru;
 
-        recent_access->next_lru = stack->top;
-        stack->top->prev_lru = recent_access;
-        stack->top = recent_access;
+        recent_access->next_lru = cache->top;
+        cache->top->prev_lru = recent_access;
+        cache->top = recent_access;
     }
 }
 
@@ -484,8 +484,8 @@ void RaiseBlockCachePosition(struct block_cache *stack, struct block_cache_entry
 /**
  * Search for block.
  */
-struct block_cache_entry* GetBlock(int block_num) {
-    struct block_cache_entry *current = LookUpBlock(cache_for_blocks,block_num);
+struct block_cache_entry* SearchForBlock(int block_num) {
+    struct block_cache_entry *current = FindBlockInCache(cache_for_blocks,block_num);
     if (current != NULL) {
         return current;
     }
@@ -496,6 +496,9 @@ struct block_cache_entry* GetBlock(int block_num) {
     return cache_for_blocks->top;
 }
 
+/*
+ * Hash the index at the key value
+ */
 int HashIndex(int key_value) {
     if (key_value > 0) {
         return key_value/8;
@@ -504,9 +507,6 @@ int HashIndex(int key_value) {
     }
 }
 
-/******************
- * Directory Name *
- ******************/
 /*
  * Compare dirnames.
  */
@@ -533,7 +533,7 @@ int CompareDirname(char *dirname, char *other);
 /**
  * Search for value in array and swap with value at index.
  */
-void SearchAndSwap(int arr[], int size, int value, int index) {
+void SwapArrayValue(int arr[], int size, int value, int index) {
     int i = -1;
     int search_index = -1;
     while (i != value && index < size) {
@@ -551,11 +551,11 @@ void SearchAndSwap(int arr[], int size, int value, int index) {
 /**
  * Push free inodes to buffer.
  */
-void GetFreeInodeList() {
-    free_inode_list = GetBuffer(file_system_header->num_inodes);
+void PushFreeInodeList() {
+    free_inode_list = StartBuffer(file_system_header->num_inodes);
     int i;
     for (i = 1; i <= file_system_header->num_inodes; i++) {
-        struct inode_cache_entry* curr_inode = GetInode(i);
+        struct inode_cache_entry* curr_inode = SearchForInode(i);
         struct inode *next = curr_inode->inode;
         if (next->type == INODE_FREE) {
             PushToBuffer(free_inode_list, i);
@@ -564,7 +564,7 @@ void GetFreeInodeList() {
 }
 
 /**
- * List of blocks that have not been allocated yet.
+ * Get the list of blocks that have not been allocated yet.
  */
 void GetFreeBlockList() {
     int inode_count = file_system_header->num_inodes + 1;
@@ -579,25 +579,25 @@ void GetFreeBlockList() {
 
     int busy_blocks = 0;
     for (i = 1; i <= file_system_header->num_inodes; i ++) {
-        struct inode_cache_entry* inode_entry = GetInode(i);
+        struct inode_cache_entry* inode_entry = SearchForInode(i);
 
         int pos = 0;
         int j = 0;
         while (pos < inode_entry->inode->size && j < NUM_DIRECT) {
-            SearchAndSwap(integer_buf, block_count, inode_entry->inode->direct[j], busy_blocks);
+            SwapArrayValue(integer_buf, block_count, inode_entry->inode->direct[j], busy_blocks);
             busy_blocks = busy_blocks + 1;
             j = j + 1;
             pos += BLOCKSIZE;
         }
 
         if (pos < inode_entry->inode->size) {
-            SearchAndSwap(integer_buf, file_system_header->num_blocks, inode_entry->inode->indirect, busy_blocks);
+            SwapArrayValue(integer_buf, file_system_header->num_blocks, inode_entry->inode->indirect, busy_blocks);
             busy_blocks = busy_blocks + 1;
-            struct block_cache_entry* curr_block = GetBlock(inode_entry->inode->indirect);
+            struct block_cache_entry* curr_block = SearchForBlock(inode_entry->inode->indirect);
             int *indirect_blocks = curr_block->block;
             j = 0;
             while (j < 128 && pos < inode_entry->inode->size) {
-                SearchAndSwap(integer_buf, file_system_header->num_blocks, indirect_blocks[j], busy_blocks);
+                SwapArrayValue(integer_buf, file_system_header->num_blocks, indirect_blocks[j], busy_blocks);
                 busy_blocks = busy_blocks + 1;
                 j = j + 1;
                 pos += BLOCKSIZE;
@@ -622,8 +622,8 @@ void GetFreeBlockList() {
 /*
  * Create new file inode.
  */
-struct inode* CreateFileInode(int new_inum, int parent_inum, short type) {
-    struct inode_cache_entry *inode_entry = GetInode(new_inum);
+struct inode* MakeFileInode(int new_inum, int parent_inum, short type) {
+    struct inode_cache_entry *inode_entry = SearchForInode(new_inum);
     struct inode *inode = inode_entry->inode;
     inode_entry->dirty = 1;
     inode->type = type;
@@ -636,7 +636,7 @@ struct inode* CreateFileInode(int new_inum, int parent_inum, short type) {
         inode->size = sizeof(struct dir_entry) * 2;
         inode->direct[0] = PopFromBuffer(free_block_list);
 
-        struct block_cache_entry *block_entry = GetBlock(inode->direct[0]);
+        struct block_cache_entry *block_entry = SearchForBlock(inode->direct[0]);
         block_entry->dirty = 1;
         struct dir_entry *block = block_entry->block;
         block[0].inum = new_inum;
@@ -649,13 +649,13 @@ struct inode* CreateFileInode(int new_inum, int parent_inum, short type) {
 }
 
 /*
- * Truncate File inode.
+ * Truncate the File inode.
  */
-struct inode* TruncateFileInode(int target_inum) {
-    struct inode_cache_entry *entry = GetInode(target_inum);
+struct inode* ShortenInode(int target_inum) {
+    struct inode_cache_entry *entry = SearchForInode(target_inum);
     struct inode *inode = entry->inode;
 
-    entry = GetInode(target_inum);
+    entry = SearchForInode(target_inum);
     entry->dirty = 1;
     inode = entry->inode;
 
@@ -665,7 +665,7 @@ struct inode* TruncateFileInode(int target_inum) {
     int iterate_count = block_count;
     if (block_count > NUM_DIRECT) {
         iterate_count = NUM_DIRECT;
-        struct block_cache_entry *indirect_block_entry = GetBlock(inode->indirect);
+        struct block_cache_entry *indirect_block_entry = SearchForBlock(inode->indirect);
         int *indirect_block = indirect_block_entry->block;
         indirect_block_entry->dirty = 1;
         for (i = 0; i < block_count - NUM_DIRECT; i++) {
@@ -707,12 +707,12 @@ int RegisterDirectory(struct inode* parent_inode, int new_inum, char *dirname) {
         if (prev_index != outer_index) {
             if (outer_index >= NUM_DIRECT) {
                 if (indirect_block == NULL) {
-                    indirect_block = GetBlock(parent_inode->indirect)->block;
+                    indirect_block = SearchForBlock(parent_inode->indirect)->block;
                 }
-                block_entry = GetBlock(indirect_block[outer_index - NUM_DIRECT]);
+                block_entry = SearchForBlock(indirect_block[outer_index - NUM_DIRECT]);
                 block = block_entry->block;
             } else {
-                block_entry = GetBlock(parent_inode->direct[outer_index]);
+                block_entry = SearchForBlock(parent_inode->direct[outer_index]);
                 block = block_entry->block;
             }
             prev_index = outer_index;
@@ -732,7 +732,7 @@ int RegisterDirectory(struct inode* parent_inode, int new_inum, char *dirname) {
             parent_inode->indirect = PopFromBuffer(free_block_list);
         }
 
-        indirect_block_entry = GetBlock(parent_inode->indirect);
+        indirect_block_entry = SearchForBlock(parent_inode->indirect);
         indirect_block = indirect_block_entry->block;
 
         outer_index = (parent_inode->size - MAX_DIRECT_SIZE) / BLOCKSIZE;
@@ -743,7 +743,7 @@ int RegisterDirectory(struct inode* parent_inode, int new_inum, char *dirname) {
             indirect_block_entry->dirty = 1;
         }
 
-        block_entry = GetBlock(indirect_block[outer_index]);
+        block_entry = SearchForBlock(indirect_block[outer_index]);
         block = block_entry->block;
     } else {
         outer_index = parent_inode->size / BLOCKSIZE;
@@ -752,7 +752,7 @@ int RegisterDirectory(struct inode* parent_inode, int new_inum, char *dirname) {
             parent_inode->direct[outer_index] = PopFromBuffer(free_block_list);
         }
 
-        block_entry = GetBlock(parent_inode->direct[outer_index]);
+        block_entry = SearchForBlock(parent_inode->direct[outer_index]);
         block = block_entry->block;
     }
 
@@ -782,12 +782,12 @@ int UnregisterDirectory(struct inode* parent_inode, int target_inum) {
         if (prev_index != outer_index) {
             if (outer_index >= NUM_DIRECT) {
                 if (indirect_block == NULL) {
-                    indirect_block = GetBlock(parent_inode->indirect)->block;
+                    indirect_block = SearchForBlock(parent_inode->indirect)->block;
                 }
-                block_entry = GetBlock(indirect_block[outer_index - NUM_DIRECT]);
+                block_entry = SearchForBlock(indirect_block[outer_index - NUM_DIRECT]);
                 block = block_entry->block;
             } else {
-                block_entry = GetBlock(parent_inode->direct[outer_index]);
+                block_entry = SearchForBlock(parent_inode->direct[outer_index]);
                 block = block_entry->block;
             }
             prev_index = outer_index;
@@ -821,11 +821,11 @@ int SearchDirectory(struct inode *inode, char *dirname) {
         if (prev_index != outer_index) {
             if (outer_index >= NUM_DIRECT) {
                 if (indirect_block == NULL) {
-                    indirect_block = GetBlock(inode->indirect)->block;
+                    indirect_block = SearchForBlock(inode->indirect)->block;
                 }
-                block = GetBlock(indirect_block[outer_index - NUM_DIRECT])->block;
+                block = SearchForBlock(indirect_block[outer_index - NUM_DIRECT])->block;
             } else {
-                block = GetBlock(inode->direct[outer_index])->block;
+                block = SearchForBlock(inode->direct[outer_index])->block;
             }
             prev_index = outer_index;
         }
@@ -857,13 +857,13 @@ int CleanDirectory(struct inode *inode) {
         if (prev_index != outer_index) {
             if (outer_index >= NUM_DIRECT) {
                 if (indirect_block == NULL) {
-                    indirect_block_entry = GetBlock(inode->indirect);
+                    indirect_block_entry = SearchForBlock(inode->indirect);
                     indirect_block = indirect_block_entry->block;
                 }
-                struct block_cache_entry* temp_block = GetBlock(indirect_block[outer_index - NUM_DIRECT]);
+                struct block_cache_entry* temp_block = SearchForBlock(indirect_block[outer_index - NUM_DIRECT]);
                 block = temp_block->block;
             } else {
-                struct block_cache_entry* temp_block = GetBlock(inode->direct[outer_index]);
+                struct block_cache_entry* temp_block = SearchForBlock(inode->direct[outer_index]);
                 block = temp_block->block;
             }
 
@@ -903,7 +903,7 @@ int CleanDirectory(struct inode *inode) {
 */
 void GetFile(FilePacket *packet) {
     int inum = packet->inum;
-    struct inode_cache_entry* inode_entry = GetInode(inum);
+    struct inode_cache_entry* inode_entry = SearchForInode(inum);
 
     memset(packet, 0, PACKET_SIZE);
     packet->packet_type = MSG_SEARCH_FILE;
@@ -929,7 +929,7 @@ void SearchFile(void *packet, int pid) {
     if (CopyFrom(pid, dirname, target, DIRNAMELEN) < 0) {
         return;
     }
-    struct inode *parent_inode = GetInode(inum)->inode;
+    struct inode *parent_inode = SearchForInode(inum)->inode;
 
     if (parent_inode->type != INODE_DIRECTORY) {
         return;
@@ -940,7 +940,7 @@ void SearchFile(void *packet, int pid) {
         return;
     }
 
-    struct inode *target_inode = GetInode(target_inum)->inode;
+    struct inode *target_inode = SearchForInode(target_inum)->inode;
     ((FilePacket *)packet)->inum = target_inum;
     ((FilePacket *)packet)->type = target_inode->type;
     ((FilePacket *)packet)->size = target_inode->size;
@@ -966,7 +966,7 @@ void CreateFile(void *packet, int pid, short type) {
         return;
     }
 
-    struct inode_cache_entry *parent_entry = GetInode(parent_inum);
+    struct inode_cache_entry *parent_entry = SearchForInode(parent_inum);
     struct inode *parent_inode = parent_entry->inode;
 
     if (parent_inode->type != INODE_DIRECTORY) {
@@ -982,7 +982,7 @@ void CreateFile(void *packet, int pid, short type) {
     int target_inum = SearchDirectory(parent_inode, dirname);
     struct inode *new_inode;
     if (target_inum > 0) {
-        new_inode = TruncateFileInode(target_inum);
+        new_inode = ShortenInode(target_inum);
     } else {
         if (free_inode_list->size == 0) {
             ((FilePacket *)packet)->inum = -3;
@@ -994,7 +994,7 @@ void CreateFile(void *packet, int pid, short type) {
         }
 
         target_inum = PopFromBuffer(free_inode_list);
-        new_inode = CreateFileInode(target_inum, parent_inum, type);
+        new_inode = MakeFileInode(target_inum, parent_inum, type);
 
         if (type == INODE_DIRECTORY) {
             parent_inode->nlink += 1;
@@ -1023,7 +1023,7 @@ void ReadFile(DataPacket *packet, int pid) {
     memset(packet, 0, PACKET_SIZE);
     packet->packet_type = MSG_READ_FILE;
 
-    struct inode_cache_entry* inode_entry = GetInode(inum);
+    struct inode_cache_entry* inode_entry = SearchForInode(inum);
     struct inode *inode = inode_entry->inode;
     if (inode->reuse != reuse) {
         packet->arg1 = -1;
@@ -1055,7 +1055,7 @@ void ReadFile(DataPacket *packet, int pid) {
     int *indirect_block = NULL;
 
     if (inode->size >= MAX_DIRECT_SIZE) {
-        struct block_cache_entry* temp_block = GetBlock(inode->indirect);
+        struct block_cache_entry* temp_block = SearchForBlock(inode->indirect);
         indirect_block = temp_block->block;
     }
 
@@ -1072,7 +1072,7 @@ void ReadFile(DataPacket *packet, int pid) {
         }
 
         if (block_id != 0) {
-            block = GetBlock(block_id)->block;
+            block = SearchForBlock(block_id)->block;
         }
         else {
             block = hole_buf;
@@ -1112,7 +1112,7 @@ void WriteFile(DataPacket *packet, int pid) {
         return;
     }
 
-    struct inode_cache_entry *inode_entry = GetInode(inum);
+    struct inode_cache_entry *inode_entry = SearchForInode(inum);
     struct inode *inode;
     inode = inode_entry->inode;
     if (inode->type != INODE_REGULAR) {
@@ -1135,7 +1135,7 @@ void WriteFile(DataPacket *packet, int pid) {
     int *indirect_block = NULL;
     // Prefetch indirect block
     if (inode->size >= MAX_DIRECT_SIZE) {
-        indirect_block = GetBlock(inode->indirect)->block;
+        indirect_block = SearchForBlock(inode->indirect)->block;
     }
 
     int inode_block_count = (inode->size + BLOCKSIZE - 1) / BLOCKSIZE;
@@ -1168,14 +1168,14 @@ void WriteFile(DataPacket *packet, int pid) {
         if (inode_block_count <= outer_index) {
             if (outer_index == NUM_DIRECT) {
                 inode->indirect = PopFromBuffer(free_block_list);
-                indirect_block_entry = GetBlock(inode->indirect);
+                indirect_block_entry = SearchForBlock(inode->indirect);
                 indirect_block = indirect_block_entry->block;
                 indirect_block_entry->dirty = 1;
                 memset(indirect_block, 0, BLOCKSIZE);
             }
 
             if (outer_index > NUM_DIRECT) {
-                indirect_block_entry = GetBlock(inode->indirect);
+                indirect_block_entry = SearchForBlock(inode->indirect);
                 indirect_block = indirect_block_entry->block;
                 indirect_block_entry->dirty = 1;
             }
@@ -1183,11 +1183,11 @@ void WriteFile(DataPacket *packet, int pid) {
             if (outer_index >= start_index) {
                 if (outer_index >= NUM_DIRECT) {
                     indirect_block[outer_index - NUM_DIRECT] = PopFromBuffer(free_block_list);
-                    block = GetBlock(indirect_block[outer_index - NUM_DIRECT])->block;
+                    block = SearchForBlock(indirect_block[outer_index - NUM_DIRECT])->block;
                     memset(block, 0, BLOCKSIZE);
                 } else {
                     inode->direct[outer_index] = PopFromBuffer(free_block_list);
-                    block = GetBlock(inode->direct[outer_index])->block;
+                    block = SearchForBlock(inode->direct[outer_index])->block;
                     memset(block, 0, BLOCKSIZE);
                     inode_entry->dirty = 1;
                 }
@@ -1206,7 +1206,7 @@ void WriteFile(DataPacket *packet, int pid) {
             block_id = inode->direct[outer_index];
         }
 
-        struct block_cache_entry *block_entry = GetBlock(block_id);
+        struct block_cache_entry *block_entry = SearchForBlock(block_id);
         block = block_entry->block;
         int prefix = (pos + copied_size) % BLOCKSIZE;
 
@@ -1246,7 +1246,7 @@ void DeleteDir(DataPacket *packet) {
     packet->packet_type = MSG_DELETE_DIR;
 
 
-    struct inode_cache_entry *parent_entry = GetInode(parent_inum);;
+    struct inode_cache_entry *parent_entry = SearchForInode(parent_inum);;
     struct inode *parent_inode = parent_entry->inode;
 
     if (parent_inode->type != INODE_DIRECTORY) {
@@ -1254,7 +1254,7 @@ void DeleteDir(DataPacket *packet) {
         return;
     }
 
-    struct inode_cache_entry *target_entry = GetInode(target_inum);
+    struct inode_cache_entry *target_entry = SearchForInode(target_inum);
     struct inode *target_inode = target_entry->inode;
 
     if (target_inode->type != INODE_DIRECTORY) {
@@ -1281,14 +1281,14 @@ void DeleteDir(DataPacket *packet) {
     struct block_cache_entry *block_entry;
     struct dir_entry *block;
 
-    block_entry = GetBlock(target_inode->direct[0]);
+    block_entry = SearchForBlock(target_inode->direct[0]);
     block_entry->dirty = 1;
     block = block_entry->block;
 
     int i;
     for (i = 0; i < 2; i++) {
         if (block[i].name[1] == '.') {
-            target_entry = GetInode(block[i].inum);
+            target_entry = SearchForInode(block[i].inum);
             target_entry->inode->nlink -= 1;
             target_entry->dirty = 1;
         }
@@ -1314,7 +1314,7 @@ void CreateLink(DataPacket *packet, int pid) {
         return;
     }
 
-    struct inode_cache_entry *target_entry = GetInode(target_inum);;
+    struct inode_cache_entry *target_entry = SearchForInode(target_inum);;
     struct inode *target_inode = target_entry->inode;
 
     if (target_inode->type != INODE_REGULAR) {
@@ -1322,7 +1322,7 @@ void CreateLink(DataPacket *packet, int pid) {
         return;
     }
 
-    struct inode_cache_entry *parent_entry = GetInode(parent_inum);
+    struct inode_cache_entry *parent_entry = SearchForInode(parent_inum);
     struct inode *parent_inode = parent_entry->inode;
 
     if (parent_inode->type != INODE_DIRECTORY) {
@@ -1350,7 +1350,7 @@ void DeleteLink(DataPacket *packet) {
     packet->packet_type = MSG_UNLINK;
     packet->arg1 = 0;
 
-    struct inode_cache_entry *parent_entry = GetInode(parent_inum);
+    struct inode_cache_entry *parent_entry = SearchForInode(parent_inum);
     struct inode *parent_inode = parent_entry->inode;
 
     if (parent_inode->type != INODE_DIRECTORY) {
@@ -1358,7 +1358,7 @@ void DeleteLink(DataPacket *packet) {
         return;
     }
 
-    struct inode_cache_entry *target_entry = GetInode(target_inum);
+    struct inode_cache_entry *target_entry = SearchForInode(target_inum);
     struct inode *target_inode = target_entry->inode;
 
     if (UnregisterDirectory(parent_inode, target_inum) < 0) {
@@ -1370,7 +1370,7 @@ void DeleteLink(DataPacket *packet) {
     target_inode->nlink -= 1;
 
     if (target_inode->nlink == 0) {
-        TruncateFileInode(target_inum);
+        ShortenInode(target_inum);
         target_inode->type = INODE_FREE;
         PushToBuffer(free_inode_list, target_inum);
     }
@@ -1385,7 +1385,7 @@ void SyncCache() {
     struct inode_cache_entry* inode;
     for (inode = cache_for_inodes->top; inode != NULL; inode = inode->next_lru) {
         if (inode->dirty) {
-            struct block_cache_entry* inode_block_entry = GetBlock((inode->inum / 8) + 1);
+            struct block_cache_entry* inode_block_entry = SearchForBlock((inode->inum / 8) + 1);
             inode_block_entry->dirty = 1;
             void* inode_block = inode_block_entry->block;
             struct inode* overwrite = (struct inode *)inode_block + (inode->inum % 8);
@@ -1420,9 +1420,9 @@ int main(int argc, char **argv) {
         file_system_header = (struct fs_header *)sector_one;
     }
 
-    cache_for_inodes = CreateInodeCache(file_system_header->num_inodes);
-    cache_for_blocks = CreateBlockCache(file_system_header->num_blocks);
-    GetFreeInodeList();
+    cache_for_inodes = MakeInodeCache(file_system_header->num_inodes);
+    cache_for_blocks = MakeBlockCache(file_system_header->num_blocks);
+    PushFreeInodeList();
     GetFreeBlockList();
 
     int pid;
