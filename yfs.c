@@ -163,24 +163,6 @@ int PopFromBuffer(struct integer_buf *buf) {
  * Block and Inode Cache *
  *************************/
 
-struct block_cache {
-    struct block_cache_entry* top; //Top of the cache stack
-    struct block_cache_entry* base; //Bottom of the cache stack
-    struct block_cache_entry** hash_set;
-    int stack_size; //Number of entries in the cache stack
-    int hash_size;
-};
-
-struct block_cache_entry {
-    void* block;
-    int block_number; //Item that this entry represents. Can either be a block or inode
-    struct block_cache_entry* prev_lru; //Previous Block in Stack
-    struct block_cache_entry* next_lru; //Next Block in Stack
-    struct block_cache_entry* prev_hash;
-    struct block_cache_entry* next_hash;
-    int dirty; //Whether or not this
-};
-
 struct inode_cache {
     struct inode_cache_entry* top; //Top of the cache stack
     struct inode_cache_entry* base; //Bottom of the cache stack
@@ -196,6 +178,24 @@ struct inode_cache_entry {
     struct inode_cache_entry* next_lru; //Next Inode in Stack
     struct inode_cache_entry* prev_hash;
     struct inode_cache_entry* next_hash;
+    int dirty; //Whether or not this
+};
+
+struct block_cache {
+    struct block_cache_entry* top; //Top of the cache stack
+    struct block_cache_entry* base; //Bottom of the cache stack
+    struct block_cache_entry** hash_set;
+    int stack_size; //Number of entries in the cache stack
+    int hash_size;
+};
+
+struct block_cache_entry {
+    void* block;
+    int block_number; //Item that this entry represents. Can either be a block or inode
+    struct block_cache_entry* prev_lru; //Previous Block in Stack
+    struct block_cache_entry* next_lru; //Next Block in Stack
+    struct block_cache_entry* prev_hash;
+    struct block_cache_entry* next_hash;
     int dirty; //Whether or not this
 };
 
@@ -222,23 +222,9 @@ void RaiseBlockCachePosition(struct block_cache *stack, struct block_cache_entry
 
 void WriteBackInode(struct inode_cache_entry* out);
 
-void WriteBackBlock(struct block_cache_entry* out);
-
 struct inode_cache_entry* GetInode(int inode_num);
 
 struct block_cache_entry* GetBlock(int block_num);
-
-void PrintInodeCacheHashSet(struct inode_cache* stack);
-
-void PrintBlockCacheHashSet(struct block_cache* stack);
-
-void PrintInodeCacheStack(struct inode_cache* stack);
-
-void PrintBlockCacheStack(struct block_cache* stack);
-
-void TestInodeCache(int num_inodes);
-
-void TestBlockCache(int num_blocks);
 
 int HashIndex(int key_value);
 
@@ -433,28 +419,6 @@ struct inode_cache_entry* GetInode(int inum) {
     return cache_for_inodes->top;
 }
 
-void PrintInodeCacheHashSet(struct inode_cache* stack) {
-    int index;
-
-    for (index = 0; index < stack->hash_size; index++) {
-        printf("[");
-        struct inode_cache_entry* entry = stack->hash_set[index];
-        while (entry != NULL) {
-            printf(" %d ",entry->inum);
-            entry = entry->next_hash;
-        }
-        printf("]\n");
-    }
-}
-
-void PrintInodeCacheStack(struct inode_cache* stack) {
-    struct inode_cache_entry* position = stack->top;
-    while (position != NULL) {
-        printf("| %d |\n", position->inum);
-        position = position->next_lru;
-    }
-}
-
 /*********************
  * Block Cache Code *
  ********************/
@@ -602,21 +566,6 @@ void RaiseBlockCachePosition(struct block_cache *stack, struct block_cache_entry
 }
 
 
-void PrintBlockCacheHashSet(struct block_cache* stack) {
-    int index;
-
-    for (index = 0; index < stack->hash_size; index++) {
-        if (stack->hash_set[index] == NULL) continue;
-        printf("[");
-        struct block_cache_entry* entry = stack->hash_set[index];
-        while (entry != NULL) {
-            printf(" %d ",entry->block_number);
-            entry = entry->next_hash;
-        }
-        printf("]\n");
-    }
-}
-
 /**
  * Returns a block, either by searching the cache or reading its sector
  * @param block_num The number of the block being requested
@@ -636,18 +585,6 @@ struct block_cache_entry* GetBlock(int block_num) {
     AddToBlockCache(cache_for_blocks, block_buf, block_num);
     return cache_for_blocks->top;
 }
-
-
-/**
- * Prints out the Block Cache as a stack
- */
- void PrintBlockCacheStack(struct block_cache* stack) {
-     struct block_cache_entry* position = stack->top;
-    for (position = stack->top; position != NULL; position = position->next_lru) {
-        printf("| %d |\n", position->block_number);
-    }
-
- }
 
 int HashIndex(int key_value) {
     if (key_value > 0) {
@@ -686,108 +623,6 @@ int CompareDirname(char *dirname, char *other);
 
      return 0;
  }
-
-/*******************
- * File Descriptor *
- *******************/
-
-typedef struct FileDescriptor {
-    int id; // FD id */
-    int used; // Only valid if used = 1 
-    int inum; // Inode number 
-    int reuse; // Same inode with different reuse means file is changed 
-    int pos; // Current position 
-} FileDescriptor;
-
-/*
- * Prepare new file descriptor using lowest available fd using file data.
- * Return NULL if open file table is all filled up.
- */
-FileDescriptor *CreateFileDescriptor();
-
-/*
- * Close file descriptor. Return -1 if fd is invalid.
- */
-int CloseFileDescriptor(int fd);
-
-/*
- * Get file descriptor. Return NULL if fd is invalid.
- */
-FileDescriptor *GetFileDescriptor(int fd);
-
-FileDescriptor open_file_table[MAX_OPEN_FILES];
-int initialized = 0;
-
-/*
- * Private helper for initializing open file table
- */
-void IntializeOpenFileTable() {
-    int i;
-    if (initialized == 1) {
-        return;
-    }
-    for (i = 0; i < MAX_OPEN_FILES; i++) {
-        open_file_table[i].id = i;
-        open_file_table[i].used = 0;
-        open_file_table[i].inum = 0;
-        open_file_table[i].pos = 0;
-    }
-    initialized = 1;
-}
-
-/*
- * Prepare new file descriptor using lowest available fd using file data.
- * Return -1 if open file table is all filled up.
- */
-FileDescriptor *CreateFileDescriptor() {
-    int i;
-    if (initialized == 0) {
-        IntializeOpenFileTable();
-    }
-    for (i = 0; i < MAX_OPEN_FILES; i++) {
-        if (open_file_table[i].used == 0) {
-            open_file_table[i].used = 1;
-            break;
-        }
-    }
-    if (i >= MAX_OPEN_FILES) {
-        return NULL;
-    }
-    return &open_file_table[i];
-}
-
-/*
- * Close file descriptor. Return -1 if fd is invalid.
- */
-int CloseFileDescriptor(int fd_id) {
-    if (fd_id < 0 || fd_id >= MAX_OPEN_FILES) {
-        return -1;
-    }
-    if (initialized == 0) {
-        return -1;
-    }
-    if (open_file_table[fd_id].used != 0) {
-        open_file_table[fd_id].used = 0;
-        return 0;
-    }
-    return -1;
-}
-
-/*
- * Get file descriptor. Return NULL if fd is invalid.
- */
-FileDescriptor *GetFileDescriptor(int fd_id) {
-    if (fd_id < 0 || fd_id >= MAX_OPEN_FILES) {
-        return NULL;
-    }
-    if (initialized == 0) {
-        return NULL;
-    }
-    if (open_file_table[fd_id].used == 0) {
-        return NULL;
-    }
-    return &open_file_table[fd_id];
-}
 
 
 
@@ -1479,9 +1314,6 @@ void WriteFile(DataPacket *packet, int pid) {
 
     /*
      * Start iterating from whichever the lowest between start and block count.
-     * - Increase size if end_index is greater than block_count.
-     * - Assign new block only if size is increased and within writing range.
-     * - Note: @634 if block is entirely hole, it is 0.
      */
     int inode_block_count = GetBlockCount(inode->size);
 
