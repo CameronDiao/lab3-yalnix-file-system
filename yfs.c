@@ -49,13 +49,13 @@ struct integer_buf {
     int full;
 };
 
-struct fs_header *header; // Pointer to File System Header
-
-struct block_cache* block_stack; // Cache for recently accessed blocks 
-struct inode_cache* inode_stack; // Cache for recently accessed inodes 
+struct fs_header *file_system_header; // Pointer to File System Header
 
 struct integer_buf* free_inode_list; // List of Inodes available to assign to files
 struct integer_buf* free_block_list; // List of blocks ready to allocate for file data
+
+struct block_cache* cache_for_blocks; // Cache for recently accessed blocks 
+struct inode_cache* cache_for_inodes; // Cache for recently accessed inodes 
 
 
 /**
@@ -77,12 +77,16 @@ void PushToBuffer(struct integer_buf *buf, int i);
  * @return the character that was popped
  */
 int PopFromBuffer(struct integer_buf *buf);
-/**
- * Prints out the contents of the buffer
- * @param buf Buffer to print
- */
-void PrintBuffer(struct integer_buf *buf);
 
+/*
+ * Fills target buffer path + empty strings.
+ */
+void SetDirectoryName(char *target, char *path, int start, int end);
+
+/**
+ * Constructor message for a new buffer
+ * @param size How much space to allocate for the buffer
+ */
 struct integer_buf *GetBuffer(int size) {
     struct integer_buf* newBuf = malloc(sizeof(struct integer_buf));
     newBuf->size = size;
@@ -95,6 +99,11 @@ struct integer_buf *GetBuffer(int size) {
     return newBuf;
 }
 
+/**
+ * Adds a value to the buffers queue
+ * @param buf Buffer to add to
+ * @param c Character that is being added
+ */
 void PushToBuffer(struct integer_buf *buf, int i) {
     if (buf->full) {
         return;
@@ -112,6 +121,11 @@ void PushToBuffer(struct integer_buf *buf, int i) {
     }
 }
 
+/**
+ * Pops the next character from the buffer's queue
+ * @param buf Buffer requesting character from
+ * @return the character that was popped
+ */
 int PopFromBuffer(struct integer_buf *buf) {
     if (buf->empty) {
         return '\0';
@@ -130,68 +144,6 @@ int PopFromBuffer(struct integer_buf *buf) {
     return next;
 }
 
-void PrintBuffer(struct integer_buf *buf) {
-    // int i;
-    if (buf->out < buf->in) {
-        int i;
-        printf("[");
-        for (i = buf->out; i < buf->in-1; i++) {
-            printf("%d, ", buf->b[i]);
-        }
-        printf("%d]\n", buf->b[buf->in-1]);
-    } else {
-        int i;
-        printf("[");
-        for (i = buf->out; i < buf->size; i++) {
-            printf("%d, ", buf->b[i]);
-        }
-        for (i = 0; i < buf->in-1; i++) {
-            printf("%d, ", buf->b[i]);
-        }
-        printf("%d]\n", buf->b[buf->in-1]);
-    }
-
-}
-
-/*****************
- * PATH HANDLING *
- *****************/
-
-typedef struct PathIterator {
-    struct PathIterator *head;
-    struct PathIterator *next;
-    char data[DIRNAMELEN];
-} PathIterator;
-
-/*
- * Fills target buffer path + empty strings.
- */
-void SetDirectoryName(char *target, char *path, int start, int end);
-
-/*
- * Given pathname as Yalnix argument, parse it
- * into a linked list of component.
- */
-PathIterator *ParsePath(char *pathname);
-
-/*
- * Free pathIterator linked list after finished using it.
- * You must provided the head of the linked list.
- */
-int DeletePathIterator(PathIterator *it);
-
-
-/*
- * Private helper method which allocate PathIterator.
- */
-PathIterator *CreatePathIterator(PathIterator *head) {
-    PathIterator *it = malloc(sizeof(PathIterator));
-    it->head = head;
-    it->next = NULL;
-    return it;
-}
-
-
 /*
  * Fills target buffer path + empty strings.
  */
@@ -203,82 +155,12 @@ PathIterator *CreatePathIterator(PathIterator *head) {
         } else {
             target[i] = '\0';
         }
-        //  if (i < end - start) target[i] = path[start + i];
-        //  else target[i] = '\0';
      }
  }
 
-/*
- * Given pathname as Yalnix argument, parse it
- * into a linked list of component.
- */
-PathIterator *ParsePath(char *pathname) {
-    PathIterator *it = CreatePathIterator(NULL);
-    PathIterator *head = it;
-
-    int i = 0;
-    int start = 0;
-    int found = 0;
-    char next;
-
-    // Backslash is found in the root position
-    if (pathname[0] == '/') {
-        SetDirectoryName(it->data, pathname, 0, 1);
-        it->next = CreatePathIterator(head);
-        it = it->next;
-        i++;
-        start = 1;
-        found = 1;
-    }
-
-    while ((next = pathname[i]) != '\0') {
-        if (found == 0 && next == '/') {
-            // Backslash is just found
-            SetDirectoryName(it->data, pathname, start, i);
-            it->next = CreatePathIterator(head);
-            it = it->next;
-            found = 1;
-        } else if (found == 1 && next != '/') {
-            // Backslash is just finished.
-            found = 0;
-            start = i;
-        }
-        i++;
-    }
-
-    if (found) {
-        // If iterator is finished after backslash is found,
-        // last component is current directory
-        SetDirectoryName(it->data, ".", 0, 1);
-        it->next = CreatePathIterator(head);
-    } else {
-        // Last remaining path
-        SetDirectoryName(it->data, pathname, start, i);
-        it->next = CreatePathIterator(head);
-    }
-
-    return head;
-}
-
-/*
- * Free pathIterator linked list after finished using it.
- * You must provided the head of the linked list.
- */
-int DeletePathIterator(PathIterator *head) {
-    PathIterator *prev;
-    PathIterator *it = head;
-
-    while (it != NULL) {
-        prev = it;
-        it = it->next;
-        free(prev);
-    }
-    return 0;
-}
-
 
 /*************************
- * Block and INode Cache *
+ * Block and Inode Cache *
  *************************/
 
 struct block_cache {
@@ -319,54 +201,51 @@ struct inode_cache_entry {
 
 int inode_count;
 int block_count;
-struct block_cache* block_stack; // Cache for recently accessed blocks
-struct inode_cache* inode_stack; // Cache for recently accessed inodes
+struct block_cache* cache_for_blocks; // Cache for recently accessed blocks
+struct inode_cache* cache_for_inodes; // Cache for recently accessed inodes
 
 struct inode_cache *CreateInodeCache();
 
-void AddToInodeCache(struct inode_cache *stack, struct inode *in, int inumber);
-
-struct inode_cache_entry* LookUpInode(struct inode_cache *stack, int inumber);
-
-void RaiseInodeCachePosition(struct inode_cache* stack, struct inode_cache_entry* recent_access);
-
-void WriteBackInode(struct inode_cache_entry* out);
-
-struct inode_cache_entry* GetInode(int inode_num);
-
-void PrintInodeCacheHashSet(struct inode_cache* stack);
-
-void PrintInodeCacheStack(struct inode_cache* stack);
-
-/*********************
- * Block Cache Code *
- ********************/
-
 struct block_cache *CreateBlockCache(int num_blocks);
+
+void AddToInodeCache(struct inode_cache *stack, struct inode *in, int inumber);
 
 void AddToBlockCache(struct block_cache *stack, void* block, int block_number);
 
+struct inode_cache_entry* LookUpInode(struct inode_cache *stack, int inumber);
+
 struct block_cache_entry* LookUpBlock(struct block_cache *stack, int block_number);
+
+void RaiseInodeCachePosition(struct inode_cache* stack, struct inode_cache_entry* recent_access);
 
 void RaiseBlockCachePosition(struct block_cache *stack, struct block_cache_entry* recent_access);
 
+void WriteBackInode(struct inode_cache_entry* out);
+
 void WriteBackBlock(struct block_cache_entry* out);
+
+struct inode_cache_entry* GetInode(int inode_num);
 
 struct block_cache_entry* GetBlock(int block_num);
 
+void PrintInodeCacheHashSet(struct inode_cache* stack);
+
 void PrintBlockCacheHashSet(struct block_cache* stack);
 
-void PrintBlockCacheStack(struct block_cache* stack);
+void PrintInodeCacheStack(struct inode_cache* stack);
 
-int HashIndex(int key_value);
+void PrintBlockCacheStack(struct block_cache* stack);
 
 void TestInodeCache(int num_inodes);
 
 void TestBlockCache(int num_blocks);
 
+int HashIndex(int key_value);
+
 /*********************
  * Inode Cache Code *
  ********************/
+
 /**
  * Creates a new Cache for Inodes
  * @return Newly created cache
@@ -378,7 +257,7 @@ struct inode_cache *CreateInodeCache(int num_inodes) {
     new_cache->stack_size = 0;
     new_cache->hash_set = calloc((num_inodes/8) + 1, sizeof(struct inode_cache_entry));
     new_cache->hash_size = (num_inodes/8) + 1;
-    inode_stack = new_cache;
+    cache_for_inodes = new_cache;
 
     struct inode* dummy_inode = malloc(sizeof(struct inode));
     int i;
@@ -538,27 +417,24 @@ void RaiseInodeCachePosition(struct inode_cache* stack, struct inode_cache_entry
  */
 struct inode_cache_entry* GetInode(int inum) {
     // Inode number must be in valid range
-    // assert(inum >= 1 && inum <= inode_count);
 
-    /** First Check the Inode Cache */
-    struct inode_cache_entry* current = LookUpInode(inode_stack, inum);
+    // First Check the Inode Cache
+    struct inode_cache_entry* current = LookUpInode(cache_for_inodes, inum);
     if (current != NULL) {
         return current;
     }
-    // if (current != NULL) return current;
 
     // If it's not in the Inode Cache, check the Block
     struct block_cache_entry* block_entry = GetBlock((inum / 8) + 1);
     void* inode_block = block_entry->block;
 
     // Add inode to cache, when accessed
-    AddToInodeCache(inode_stack, (struct inode *)inode_block + (inum % 8), inum);
-    return inode_stack->top;
+    AddToInodeCache(cache_for_inodes, (struct inode *)inode_block + (inum % 8), inum);
+    return cache_for_inodes->top;
 }
 
 void PrintInodeCacheHashSet(struct inode_cache* stack) {
     int index;
-    // struct inode_cache_entry* entry;
 
     for (index = 0; index < stack->hash_size; index++) {
         printf("[");
@@ -592,7 +468,7 @@ struct block_cache *CreateBlockCache(int num_blocks) {
     new_cache->stack_size = 0;
     new_cache->hash_set = calloc((num_blocks/8) + 1, sizeof(struct block_cache_entry));
     new_cache->hash_size = (num_blocks/8) + 1;
-    block_stack = new_cache;
+    cache_for_blocks = new_cache;
     return new_cache;
 }
 
@@ -749,7 +625,7 @@ void PrintBlockCacheHashSet(struct block_cache* stack) {
 struct block_cache_entry* GetBlock(int block_num) {
 
     // First Check Block Cache
-    struct block_cache_entry *current = LookUpBlock(block_stack,block_num);
+    struct block_cache_entry *current = LookUpBlock(cache_for_blocks,block_num);
     if (current != NULL) {
         return current;
     }
@@ -757,8 +633,8 @@ struct block_cache_entry* GetBlock(int block_num) {
    // If not found in cache, read directly from disk
     void *block_buf = malloc(SECTORSIZE);
     ReadSector(block_num, block_buf);
-    AddToBlockCache(block_stack, block_buf, block_num);
-    return block_stack->top;
+    AddToBlockCache(cache_for_blocks, block_buf, block_num);
+    return cache_for_blocks->top;
 }
 
 
@@ -951,9 +827,9 @@ void SearchAndSwap(int arr[], int size, int value, int index) {
  * Iterates through Inodes and pushes each free one to the buffer
  */
 void GetFreeInodeList() {
-    free_inode_list = GetBuffer(header->num_inodes);
+    free_inode_list = GetBuffer(file_system_header->num_inodes);
     int i;
-    for (i = 1; i <= header->num_inodes; i++) {
+    for (i = 1; i <= file_system_header->num_inodes; i++) {
         struct inode_cache_entry* curr_inode = GetInode(i);
         struct inode *next = curr_inode->inode;
         if (next->type == INODE_FREE) {
@@ -967,11 +843,11 @@ void GetFreeInodeList() {
  */
 void GetFreeBlockList() {
     // Compute number of blocks occupited by inodes 
-    int inode_count = header->num_inodes + 1;
+    int inode_count = file_system_header->num_inodes + 1;
     int inode_block_count = (inode_count + INODE_PER_BLOCK - 1) / INODE_PER_BLOCK;
 
     // Compute number of blocks with inodes and boot block excluded 
-    int block_count = header->num_blocks - inode_block_count - 1;
+    int block_count = file_system_header->num_blocks - inode_block_count - 1;
     // int first_data_block = 1 + inode_block_count;
     int *integer_buf = malloc(block_count * sizeof(int));
     int i;
@@ -983,7 +859,7 @@ void GetFreeBlockList() {
 
     // Iterate through inodes to check which ones are using blocks
     int busy_blocks = 0;
-    for (i = 1; i <= header->num_inodes; i ++) {
+    for (i = 1; i <= file_system_header->num_inodes; i ++) {
         struct inode_cache_entry* inode_entry = GetInode(i);
 
         int pos = 0;
@@ -999,13 +875,13 @@ void GetFreeBlockList() {
          * and the array that's contained
          */
         if (pos < inode_entry->inode->size) {
-            SearchAndSwap(integer_buf, header->num_blocks, inode_entry->inode->indirect, busy_blocks);
+            SearchAndSwap(integer_buf, file_system_header->num_blocks, inode_entry->inode->indirect, busy_blocks);
             busy_blocks = busy_blocks + 1;
             struct block_cache_entry* curr_block = GetBlock(inode_entry->inode->indirect);
             int *indirect_blocks = curr_block->block;
             j = 0;
             while (j < 128 && pos < inode_entry->inode->size) {
-                SearchAndSwap(integer_buf, header->num_blocks, indirect_blocks[j], busy_blocks);
+                SearchAndSwap(integer_buf, file_system_header->num_blocks, indirect_blocks[j], busy_blocks);
                 busy_blocks = busy_blocks + 1;
                 j = j + 1;
                 pos += BLOCKSIZE;
@@ -1887,7 +1763,7 @@ void DeleteLink(DataPacket *packet) {
 void SyncCache() {
     // Synchronize Inodes in Cache to Blocks in Cache
     struct inode_cache_entry* inode;
-    for (inode = inode_stack->top; inode != NULL; inode = inode->next_lru) {
+    for (inode = cache_for_inodes->top; inode != NULL; inode = inode->next_lru) {
         if (inode->dirty) {
             struct block_cache_entry* inode_block_entry = GetBlock((inode->inum / 8) + 1);
             inode_block_entry->dirty = 1;
@@ -1899,7 +1775,7 @@ void SyncCache() {
     }
 
     // Synchronize Blocks in Cache to Disk
-    struct block_cache_entry* block = block_stack->top;
+    struct block_cache_entry* block = cache_for_blocks->top;
     while (block != NULL) {
         if (block->dirty) {
             WriteSector(block->block_number, block->block);
@@ -1920,11 +1796,11 @@ int main(int argc, char **argv) {
         printf("Error\n");
     }
     else {
-        header = (struct fs_header *)sector_one;
+        file_system_header = (struct fs_header *)sector_one;
     }
 
-    inode_stack = CreateInodeCache(header->num_inodes);
-    block_stack = CreateBlockCache(header->num_blocks);
+    cache_for_inodes = CreateInodeCache(file_system_header->num_inodes);
+    cache_for_blocks = CreateBlockCache(file_system_header->num_blocks);
     GetFreeInodeList();
     GetFreeBlockList();
 

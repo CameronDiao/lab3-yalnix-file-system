@@ -4,9 +4,7 @@
 #include <comp421/yalnix.h>
 #include <comp421/iolib.h>
 #include <comp421/filesystem.h>
-// #include "path.h"
 #include "packet.h"
-// #include "fd.h"
 
 /*****************
  * PATH HANDLING *
